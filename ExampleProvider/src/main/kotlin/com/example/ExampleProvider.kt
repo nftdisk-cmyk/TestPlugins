@@ -26,6 +26,7 @@ class ExampleProvider : MainAPI() {
     private val requestHeaders = mapOf(
         "User-Agent"      to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer"         to "$mainUrl/",
+        "Origin"          to mainUrl,
         "X-Requested-With" to "XMLHttpRequest",
         "Accept"          to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language" to "en-US,en;q=0.9,tr;q=0.8"
@@ -109,14 +110,18 @@ class ExampleProvider : MainAPI() {
         }
     }
 
-    // 4. LOAD LINKS: Extract the real stream URL and filter out bet advertisements
+    // 4. LOAD LINKS: Extract real stream URLs and provide multi-server options
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val pageHtml = app.get(data, headers = requestHeaders).text
+        val pageHtml = try {
+            app.get(data, headers = requestHeaders).text
+        } catch (e: Exception) {
+            ""
+        }
 
         // 1. Extract dynamic baseUrl from page CONFIG script, e.g. "https://2i4.d72577a9dd0ec71.cfd/"
         val baseUrlRegex = Regex("""baseUrl\s*:\s*['"]([^'"]+)['"]""")
@@ -125,29 +130,51 @@ class ExampleProvider : MainAPI() {
         // 2. Extract channel id from page URL (e.g. ?id=patron)
         val channelId = Uri.parse(data).getQueryParameter("id")
 
+        val streamHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer" to "$mainUrl/",
+            "Origin" to mainUrl,
+            "Accept" to "*/*"
+        )
+
         if (!channelId.isNullOrEmpty()) {
-            val streamUrl = if (channelId.startsWith("http://") || channelId.startsWith("https://")) {
+            val primaryStreamUrl = if (channelId.startsWith("http://") || channelId.startsWith("https://")) {
                 channelId
             } else {
                 "${baseUrl.trimEnd('/')}/$channelId/mono.m3u8"
             }
 
+            // Primary server from dynamic baseUrl
             callback.invoke(
                 newExtractorLink(
                     source = name,
-                    name = name,
-                    url = streamUrl,
+                    name = "$name - Canlı Yayın",
+                    url = primaryStreamUrl,
                     type = ExtractorLinkType.M3U8
                 ) {
                     this.referer = "$mainUrl/"
-                    this.headers = mapOf(
-                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        "Referer" to "$mainUrl/",
-                        "Origin" to mainUrl
-                    )
+                    this.headers = streamHeaders
                     this.quality = Qualities.P1080.value
                 }
             )
+
+            // Direct fallback server without subdomain
+            val directStreamUrl = "https://d72577a9dd0ec71.cfd/$channelId/mono.m3u8"
+            if (directStreamUrl != primaryStreamUrl) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = "$name - Yedek Sunucu",
+                        url = directStreamUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "$mainUrl/"
+                        this.headers = streamHeaders
+                        this.quality = Qualities.P1080.value
+                    }
+                )
+            }
+
             return true
         }
 
@@ -161,16 +188,12 @@ class ExampleProvider : MainAPI() {
             callback.invoke(
                 newExtractorLink(
                     source = name,
-                    name = name,
+                    name = "$name - Canlı Yayın",
                     url = matchedUrl,
                     type = ExtractorLinkType.M3U8
                 ) {
                     this.referer = "$mainUrl/"
-                    this.headers = mapOf(
-                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        "Referer" to "$mainUrl/",
-                        "Origin" to mainUrl
-                    )
+                    this.headers = streamHeaders
                     this.quality = Qualities.P1080.value
                 }
             )
