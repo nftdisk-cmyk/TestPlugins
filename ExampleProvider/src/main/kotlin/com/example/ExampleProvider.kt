@@ -109,7 +109,7 @@ class ExampleProvider : MainAPI() {
         }
     }
 
-    // 4. LOAD LINKS: Extract the .m3u8 stream URL for playback
+    // 4. LOAD LINKS: Extract the real stream URL and filter out bet advertisements
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -118,9 +118,45 @@ class ExampleProvider : MainAPI() {
     ): Boolean {
         val pageHtml = app.get(data, headers = requestHeaders).text
 
-        // Primary: find a raw .m3u8 URL in the page source
+        // 1. Extract dynamic baseUrl from page CONFIG script, e.g. "https://2i4.d72577a9dd0ec71.cfd/"
+        val baseUrlRegex = Regex("""baseUrl\s*:\s*['"]([^'"]+)['"]""")
+        val baseUrl = baseUrlRegex.find(pageHtml)?.groupValues?.get(1) ?: "https://2i4.d72577a9dd0ec71.cfd/"
+
+        // 2. Extract channel id from page URL (e.g. ?id=patron)
+        val channelId = Uri.parse(data).getQueryParameter("id")
+
+        if (!channelId.isNullOrEmpty()) {
+            val streamUrl = if (channelId.startsWith("http://") || channelId.startsWith("https://")) {
+                channelId
+            } else {
+                "${baseUrl.trimEnd('/')}/$channelId/mono.m3u8"
+            }
+
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = name,
+                    url = streamUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = "$mainUrl/"
+                    this.headers = mapOf(
+                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "Referer" to "$mainUrl/",
+                        "Origin" to mainUrl
+                    )
+                    this.quality = Qualities.P1080.value
+                }
+            )
+            return true
+        }
+
+        // 3. Fallback: only match .m3u8 that are NOT bet preroll ad videos
         val m3u8Regex = Regex("""https?://[^\s"'<>]+?\.m3u8[^\s"'<>]*""")
-        val matchedUrl = m3u8Regex.find(pageHtml)?.value
+        val matchedUrl = m3u8Regex.findAll(pageHtml)
+            .map { it.value }
+            .firstOrNull { !it.contains("video.bsky.app") && !it.contains("preroll") }
+
         if (!matchedUrl.isNullOrEmpty()) {
             callback.invoke(
                 newExtractorLink(
@@ -129,25 +165,12 @@ class ExampleProvider : MainAPI() {
                     url = matchedUrl,
                     type = ExtractorLinkType.M3U8
                 ) {
-                    this.referer = mainUrl
-                    this.quality = Qualities.P1080.value
-                }
-            )
-            return true
-        }
-
-        // Fallback: construct the stream URL from the channel ID query parameter
-        val channelId = Uri.parse(data).getQueryParameter("id")
-        if (!channelId.isNullOrEmpty()) {
-            val fallbackUrl = "https://d72577a9dd0ec71.cfd/$channelId/mono.m3u8"
-            callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name = name,
-                    url = fallbackUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = mainUrl
+                    this.referer = "$mainUrl/"
+                    this.headers = mapOf(
+                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "Referer" to "$mainUrl/",
+                        "Origin" to mainUrl
+                    )
                     this.quality = Qualities.P1080.value
                 }
             )
