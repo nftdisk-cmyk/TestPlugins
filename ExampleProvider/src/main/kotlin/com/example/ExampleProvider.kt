@@ -18,10 +18,12 @@ class ExampleProvider : MainAPI() {
     override val mainPage = mainPageOf(Pair("7-24", "7/24 Canlı TV"))
 
     private val requestHeaders = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer" to "$mainUrl/",
-        "X-Requested-With" to "XMLHttpRequest"
-    )
+    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer" to "${mainUrl}/",
+    "X-Requested-With" to "XMLHttpRequest",
+    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language" to "en-US,en;q=0.9,tr;q=0.8"
+)
 
     // 1. ANA SAYFA KAZIMA: 7/24 sekmesindeki tüm canlı kanalları (beIN Sports vb.) listeler
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -29,8 +31,8 @@ class ExampleProvider : MainAPI() {
         val htmlResponse = app.get("$mainUrl/kategori/${request.data}", headers = requestHeaders).text
         val document = Jsoup.parse(htmlResponse)
 
-        document.select("div.card.channel-card, div.video-item, a.channel-link").forEach { element ->
-            val title = element.select(".channel-name, h3, .title").text().trim()
+        document.select("div.channel-card, a.channel-item").forEach { element ->
+            val title = element.select(".channel-name").text().trim()
             val channelUrl = element.attr("href")
             val poster = element.select("img").attr("src")
 
@@ -55,8 +57,8 @@ class ExampleProvider : MainAPI() {
         val htmlResponse = app.get("$mainUrl/?s=${query.trim()}", headers = requestHeaders).text
         val document = Jsoup.parse(htmlResponse)
 
-        document.select("div.card.channel-card, div.video-item").forEach { element ->
-            val title = element.select(".channel-name, h3").text().trim()
+        document.select("div.channel-card, a.channel-item").forEach { element ->
+            val title = element.select(".channel-name").text().trim()
             val channelUrl = element.attr("href")
             val poster = element.select("img").attr("src")
 
@@ -113,6 +115,25 @@ class ExampleProvider : MainAPI() {
             )
             return true
         }
-        return false
+        // If no direct .m3u8 link is found, construct it from the channel ID
+        if (matchedUrl.isNullOrEmpty()) {
+            // Extract the channel ID from the URL query parameter "id"
+            val uri = android.net.Uri.parse(data)
+            val channelId = uri.getQueryParameter("id")
+            if (!channelId.isNullOrEmpty()) {
+                val fallbackUrl = "https://d72577a9dd0ec71.cfd/${channelId}/mono.m3u8"
+                callback.invoke(
+                    ExtractorLink(
+                        source = name,
+                        name = name,
+                        url = fallbackUrl,
+                        referer = mainUrl,
+                        quality = Qualities.P1080.value,
+                        isM3u8 = true
+                    )
+                )
+                return true
+            }
+        }
     }
 }
