@@ -116,24 +116,23 @@ class ExampleProvider : MainAPI() {
             return true
         }
         // If no direct .m3u8 link is found, construct it from the channel ID
-        if (matchedUrl.isNullOrEmpty()) {
-            // Extract the channel ID from the URL query parameter "id"
-            val uri = android.net.Uri.parse(data)
-            val channelId = uri.getQueryParameter("id")
-            if (!channelId.isNullOrEmpty()) {
-                val fallbackUrl = "https://d72577a9dd0ec71.cfd/${channelId}/mono.m3u8"
-                callback.invoke(
-                    ExtractorLink(
-                        source = name,
-                        name = name,
-                        url = fallbackUrl,
-                        referer = mainUrl,
-                        quality = Qualities.P1080.value,
-                        isM3u8 = true
-                    )
+        val uri = android.net.Uri.parse(data)
+        val channelId = uri.getQueryParameter("id")
+        if (!channelId.isNullOrEmpty()) {
+            val fallbackUrl = "https://d72577a9dd0ec71.cfd/${channelId}/mono.m3u8"
+            callback.invoke(
+                ExtractorLink(
+                    source = name,
+                    name = name,
+                    url = fallbackUrl,
+                    referer = mainUrl,
+                    quality = Qualities.P1080.value,
+                    isM3u8 = true
                 )
-                return true
-            }
+            )
+            return true
         }
+
+        return false
     }
 }
