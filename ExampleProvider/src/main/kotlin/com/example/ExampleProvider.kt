@@ -16,8 +16,12 @@ class ExampleProvider : MainAPI() {
     override val hasMainPage = true
 
     override val mainPage = mainPageOf(
-        Pair("7-24", "7/24 Canlı TV")
+        Pair("24-7", "7/24 Canlı TV"),
+        Pair("matches", "Canlı Maçlar"),
+        Pair("all", "Tüm Kanallar")
     )
+
+    private val defaultPoster = "https://upload.wikimedia.org/wikipedia/commons/2/2f/Korduene_Logo.png"
 
     private val requestHeaders = mapOf(
         "User-Agent"      to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -27,16 +31,26 @@ class ExampleProvider : MainAPI() {
         "Accept-Language" to "en-US,en;q=0.9,tr;q=0.8"
     )
 
-    // 1. MAIN PAGE: List all live channels from the 7/24 category
+    // 1. MAIN PAGE: List all live channels from the homepage tabs
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val channelList = mutableListOf<SearchResponse>()
-        val htmlResponse = app.get("$mainUrl/kategori/${request.data}", headers = requestHeaders).text
+        val htmlResponse = app.get("$mainUrl/", headers = requestHeaders).text
         val document = Jsoup.parse(htmlResponse)
 
-        document.select("div.channel-card, a.channel-item").forEach { element ->
+        val selector = when (request.data) {
+            "24-7" -> "#24-7-tab a.channel-item"
+            "matches" -> "#matches-tab a.channel-item"
+            else -> "a.channel-item"
+        }
+
+        var elements = document.select(selector)
+        if (elements.isEmpty()) {
+            elements = document.select("a.channel-item")
+        }
+
+        elements.forEach { element ->
             val title = element.select(".channel-name").text().trim()
             val channelUrl = element.attr("href")
-            val poster = element.select("img").attr("src")
 
             if (title.isNotEmpty() && channelUrl.isNotEmpty()) {
                 channelList.add(
@@ -45,7 +59,7 @@ class ExampleProvider : MainAPI() {
                         url = fixUrl(channelUrl),
                         type = TvType.Live
                     ) {
-                        this.posterUrl = fixUrl(poster)
+                        this.posterUrl = defaultPoster
                     }
                 )
             }
@@ -53,16 +67,15 @@ class ExampleProvider : MainAPI() {
         return newHomePageResponse(request, channelList)
     }
 
-    // 2. SEARCH: Handle search queries for channels
+    // 2. SEARCH: Handle search queries across all channels
     override suspend fun search(query: String): List<SearchResponse> {
         val searchList = mutableListOf<SearchResponse>()
-        val htmlResponse = app.get("$mainUrl/?s=${query.trim()}", headers = requestHeaders).text
+        val htmlResponse = app.get("$mainUrl/", headers = requestHeaders).text
         val document = Jsoup.parse(htmlResponse)
 
-        document.select("div.channel-card, a.channel-item").forEach { element ->
+        document.select("a.channel-item").forEach { element ->
             val title = element.select(".channel-name").text().trim()
             val channelUrl = element.attr("href")
-            val poster = element.select("img").attr("src")
 
             if (title.isNotEmpty() && title.lowercase().contains(query.lowercase())) {
                 searchList.add(
@@ -71,7 +84,7 @@ class ExampleProvider : MainAPI() {
                         url = fixUrl(channelUrl),
                         type = TvType.Live
                     ) {
-                        this.posterUrl = fixUrl(poster)
+                        this.posterUrl = defaultPoster
                     }
                 )
             }
@@ -84,14 +97,14 @@ class ExampleProvider : MainAPI() {
         val htmlResponse = app.get(url, headers = requestHeaders).text
         val document = Jsoup.parse(htmlResponse)
         val title = document.select("h1.entry-title, .channel-title").text().trim().ifEmpty { "Canlı Kanal" }
-        val poster = document.select("meta[property=og:image]").attr("content")
+        val poster = document.select("meta[property=og:image]").attr("content").ifEmpty { defaultPoster }
 
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
             dataUrl = url
         ) {
-            this.posterUrl = poster.ifEmpty { null }
+            this.posterUrl = poster
             this.plot = "$title – 7/24 Kesintisiz Canlı TV yayını."
         }
     }
