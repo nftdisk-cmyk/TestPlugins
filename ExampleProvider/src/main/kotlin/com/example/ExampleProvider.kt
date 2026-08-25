@@ -1,12 +1,11 @@
 package com.example
 
+import android.net.Uri
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import org.jsoup.Jsoup
-import java.util.ArrayList
 
-// Sınıf adını şablon yapısına uygun olarak ExampleProvider olarak koruyoruz
 class ExampleProvider : MainAPI() {
     override var mainUrl = "https://inattv1321.xyz"
     override var name = "İnat TV"
@@ -14,20 +13,21 @@ class ExampleProvider : MainAPI() {
     override var lang = "tr"
     override val hasMainPage = true
 
-    // Ekran görüntüsündeki 7/24 TV sekmesini hedefliyoruz
-    override val mainPage = mainPageOf(Pair("7-24", "7/24 Canlı TV"))
+    override val mainPage = mainPageOf(
+        Pair("7-24", "7/24 Canlı TV")
+    )
 
     private val requestHeaders = mapOf(
-    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Referer" to "${mainUrl}/",
-    "X-Requested-With" to "XMLHttpRequest",
-    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language" to "en-US,en;q=0.9,tr;q=0.8"
-)
+        "User-Agent"      to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer"         to "$mainUrl/",
+        "X-Requested-With" to "XMLHttpRequest",
+        "Accept"          to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language" to "en-US,en;q=0.9,tr;q=0.8"
+    )
 
-    // 1. ANA SAYFA KAZIMA: 7/24 sekmesindeki tüm canlı kanalları (beIN Sports vb.) listeler
+    // 1. MAIN PAGE: List all live channels from the 7/24 category
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val channelList = ArrayList<SearchResponse>()
+        val channelList = mutableListOf<SearchResponse>()
         val htmlResponse = app.get("$mainUrl/kategori/${request.data}", headers = requestHeaders).text
         val document = Jsoup.parse(htmlResponse)
 
@@ -48,12 +48,12 @@ class ExampleProvider : MainAPI() {
                 )
             }
         }
-        return newHomePageResponse(request.name, channelList)
+        return newHomePageResponse(request, channelList)
     }
 
-    // 2. ARAMA FONKSİYONU: Maç veya kanal ara kutusuna yazılan sorguları işler
+    // 2. SEARCH: Handle search queries for channels
     override suspend fun search(query: String): List<SearchResponse> {
-        val searchList = ArrayList<SearchResponse>()
+        val searchList = mutableListOf<SearchResponse>()
         val htmlResponse = app.get("$mainUrl/?s=${query.trim()}", headers = requestHeaders).text
         val document = Jsoup.parse(htmlResponse)
 
@@ -62,9 +62,13 @@ class ExampleProvider : MainAPI() {
             val channelUrl = element.attr("href")
             val poster = element.select("img").attr("src")
 
-            if (title.lowercase().contains(query.lowercase())) {
+            if (title.isNotEmpty() && title.lowercase().contains(query.lowercase())) {
                 searchList.add(
-                    newLiveSearchResponse(name = title, url = fixUrl(channelUrl), type = TvType.Live) {
+                    newLiveSearchResponse(
+                        name = title,
+                        url = fixUrl(channelUrl),
+                        type = TvType.Live
+                    ) {
                         this.posterUrl = fixUrl(poster)
                     }
                 )
@@ -73,25 +77,24 @@ class ExampleProvider : MainAPI() {
         return searchList
     }
 
-    // 3. DETAY SAYFASI: Kanala tıklandığında oynatıcı arayüzünü hazırlar
+    // 3. LOAD: Prepare the player UI when a channel is selected
     override suspend fun load(url: String): LoadResponse {
         val htmlResponse = app.get(url, headers = requestHeaders).text
         val document = Jsoup.parse(htmlResponse)
         val title = document.select("h1.entry-title, .channel-title").text().trim().ifEmpty { "Canlı Kanal" }
         val poster = document.select("meta[property=og:image]").attr("content")
 
-        return newLiveLoadResponse(
+        return newLiveStreamLoadResponse(
             name = title,
             url = url,
-            type = TvType.Live,
             dataUrl = url
         ) {
-            this.posterUrl = poster
-            this.plot = "$title 7/24 Kesintisiz Canlı TV yayını."
+            this.posterUrl = poster.ifEmpty { null }
+            this.plot = "$title – 7/24 Kesintisiz Canlı TV yayını."
         }
     }
 
-    // 4. GİZLİ VİDEO LİNKİNİ AYIKLAMA: Sayfa arkasındaki ham .m3u8 linkini yakalar
+    // 4. LOAD LINKS: Extract the .m3u8 stream URL for playback
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -99,9 +102,10 @@ class ExampleProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val pageHtml = app.get(data, headers = requestHeaders).text
+
+        // Primary: find a raw .m3u8 URL in the page source
         val m3u8Regex = Regex("""https?://[^\s"'<>]+?\.m3u8[^\s"'<>]*""")
         val matchedUrl = m3u8Regex.find(pageHtml)?.value
-
         if (!matchedUrl.isNullOrEmpty()) {
             callback.invoke(
                 ExtractorLink(
@@ -115,11 +119,11 @@ class ExampleProvider : MainAPI() {
             )
             return true
         }
-        // If no direct .m3u8 link is found, construct it from the channel ID
-        val uri = android.net.Uri.parse(data)
-        val channelId = uri.getQueryParameter("id")
+
+        // Fallback: construct the stream URL from the channel ID query parameter
+        val channelId = Uri.parse(data).getQueryParameter("id")
         if (!channelId.isNullOrEmpty()) {
-            val fallbackUrl = "https://d72577a9dd0ec71.cfd/${channelId}/mono.m3u8"
+            val fallbackUrl = "https://d72577a9dd0ec71.cfd/$channelId/mono.m3u8"
             callback.invoke(
                 ExtractorLink(
                     source = name,
