@@ -12,9 +12,10 @@ class ExamplePlugin: Plugin() {
     override fun load(context: Context) {
         activity = context as? AppCompatActivity
 
-        // All providers should be added in this manner
-        registerMainAPI(ExampleProvider())
+        // İnat TV canlı yayın sağlayıcımızı sisteme entegre ediyoruz
+        registerMainAPI(InatTvProvider())
 
+        // Şablonun beraberinde getirdiği BlankFragment ayarlar menüsünü koruyoruz
         openSettings = {
             val frag = BlankFragment(this)
             activity?.let {
