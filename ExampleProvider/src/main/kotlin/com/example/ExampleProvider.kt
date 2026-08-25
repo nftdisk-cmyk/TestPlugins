@@ -3,7 +3,9 @@ package com.example
 import android.net.Uri
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.Jsoup
 
 class ExampleProvider : MainAPI() {
@@ -108,14 +110,15 @@ class ExampleProvider : MainAPI() {
         val matchedUrl = m3u8Regex.find(pageHtml)?.value
         if (!matchedUrl.isNullOrEmpty()) {
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = name,
                     name = name,
                     url = matchedUrl,
-                    referer = mainUrl,
-                    quality = Qualities.P1080.value,
-                    isM3u8 = true
-                )
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = mainUrl
+                    this.quality = Qualities.P1080.value
+                }
             )
             return true
         }
@@ -125,14 +128,15 @@ class ExampleProvider : MainAPI() {
         if (!channelId.isNullOrEmpty()) {
             val fallbackUrl = "https://d72577a9dd0ec71.cfd/$channelId/mono.m3u8"
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = name,
                     name = name,
                     url = fallbackUrl,
-                    referer = mainUrl,
-                    quality = Qualities.P1080.value,
-                    isM3u8 = true
-                )
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = mainUrl
+                    this.quality = Qualities.P1080.value
+                }
             )
             return true
         }
