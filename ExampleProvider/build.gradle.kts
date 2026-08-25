@@ -3,14 +3,13 @@ dependencies {
     implementation("androidx.recyclerview:recyclerview:1.3.2")
 }
 
-// Use an integer for version numbers
+// Sürüm numarasını tam sayı (Integer) olarak belirtiyoruz
 version = 1
 
 cloudstream {
-    // All of these properties are optional, you can safely remove any of them.
-
-    description = "Lorem ipsum"
-    authors = listOf("Cloudburst", "Luna712")
+    // Eklentimizin uygulamanın uzantılar sayfasında görünecek bilgileri
+    description = "İnat TV üzerindeki 7/24 canlı TV kanallarını ve beIN Sports yayınlarını izlemenizi sağlar."
+    authors = listOf("bushidoxyz")
 
     /**
     * Status int as one of the following:
@@ -19,14 +18,15 @@ cloudstream {
     * 2: Slow
     * 3: Beta-only
     **/
-    status = 1 // Will be 3 if unspecified
+    status = 1 // Uzantının durumunu aktif (Ok) olarak işaretliyoruz
 
-    tvTypes = listOf("Movie")
+    // İçerik tipini sadece Canlı Yayın (Live) olarak güncelliyoruz
+    tvTypes = listOf("Live")
 
     requiresResources = true
-    language = "en"
+    language = "tr"
 
-    // Random CC logo I found
+    // İnat TV için ilettiğin görsel bağlantısını ikon olarak tanımlıyoruz
     iconUrl = "https://upload.wikimedia.org/wikipedia/commons/2/2f/Korduene_Logo.png"
 }
 
