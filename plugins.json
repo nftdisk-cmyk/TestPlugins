@@ -1,0 +1,22 @@
+[
+    {
+        "iconUrl": "https://www.seirsanduk.online/images/logo.png",
+        "fileHash": "sha256-0c5d54e85949ec1562f45f92bc8d5024509582a3abaae3c522d8ec2a46bc0846",
+        "apiVersion": 1,
+        "repositoryUrl": "https://github.com/nftdisk-cmyk/TestPlugins",
+        "fileSize": 28891,
+        "status": 1,
+        "language": "bg",
+        "authors": [
+            "bushidoxyz"
+        ],
+        "tvTypes": [
+            "Live"
+        ],
+        "version": 19,
+        "internalName": "ExampleProvider",
+        "description": "Bushido TV \u00fczerindeki canl\u0131 TV, spor, film ve \u00e7ocuk kanallar\u0131n\u0131 kesintisiz izlemenizi sa\u011flar.",
+        "url": "https://raw.githubusercontent.com/nftdisk-cmyk/TestPlugins/builds/ExampleProvider.cs3",
+        "name": "ExampleProvider"
+    }
+]
