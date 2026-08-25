@@ -13,7 +13,7 @@ class ExamplePlugin: Plugin() {
         activity = context as? AppCompatActivity
 
         // İnat TV canlı yayın sağlayıcımızı sisteme entegre ediyoruz
-        registerMainAPI(InatTvProvider())
+        registerMainAPI(ExampleProvider())
 
         // Şablonun beraberinde getirdiği BlankFragment ayarlar menüsünü koruyoruz
         openSettings = {
