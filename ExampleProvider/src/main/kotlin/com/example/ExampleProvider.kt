@@ -23,6 +23,7 @@ class ExampleProvider : MainAPI() {
     )
 
     private val defaultPoster = "https://www.seirsanduk.online/images/logo.png"
+    private val rawLogoBase = "https://raw.githubusercontent.com/nftdisk-cmyk/TestPlugins/master/logos"
 
     private val browserHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -32,62 +33,29 @@ class ExampleProvider : MainAPI() {
     )
 
     /**
-     * Maps channel names to crystal clear high-resolution HD logos.
+     * Maps channel names to custom 256x256 pixel-perfect HD logos.
      * Falls back to the website thumbnail if no custom HD logo is matched.
      */
     private fun getHighResLogo(title: String, defaultImg: String): String {
         val lower = title.lowercase()
         return when {
-            lower.contains("bnt 1") -> "https://i.imgur.com/7JU9b5j.png"
-            lower.contains("bnt 2") -> "https://i.imgur.com/FyTUr9Q.png"
-            lower.contains("bnt 3") -> "https://i.imgur.com/pPpSJ4u.png"
-            lower.contains("bnt 4") -> "https://i.imgur.com/Lw8b3yu.png"
-            lower.contains("btv action") -> "https://i.imgur.com/hGUXHuT.png"
-            lower.contains("btv cinema") -> "https://i.imgur.com/uV81rS4.png"
-            lower.contains("btv comedy") -> "https://i.imgur.com/1c6A5dO.png"
-            lower.contains("btv story") || lower.contains("btv lady") -> "https://i.imgur.com/rXBPJ1e.png"
-            lower.contains("btv") -> "https://i.imgur.com/l47z7gw.png"
-            lower.contains("kino nova") -> "https://i.imgur.com/hMqEY0J.png"
-            lower.contains("nova news") -> "https://i.imgur.com/s6IryS3.png"
-            lower.contains("nova sport") -> "https://i.imgur.com/WCsPSLX.png"
-            lower.contains("nova") -> "https://i.imgur.com/WCsPSLX.png"
-            lower.contains("diema family") -> "https://i.imgur.com/SgNVY4d.png"
-            lower.contains("diema sport 3") -> "https://i.imgur.com/SgNVY4d.png"
-            lower.contains("diema sport 2") -> "https://i.imgur.com/SgNVY4d.png"
-            lower.contains("diema sport") -> "https://i.imgur.com/SgNVY4d.png"
-            lower.contains("diema") -> "https://i.imgur.com/SgNVY4d.png"
-            lower.contains("max sport 1") -> "https://i.imgur.com/0ohnpql.png"
-            lower.contains("max sport 2") -> "https://i.imgur.com/33m1wPN.png"
-            lower.contains("max sport 3") -> "https://i.imgur.com/eGiGgZ2.png"
-            lower.contains("max sport 4") -> "https://i.imgur.com/7IxXX6f.png"
-            lower.contains("max one") -> "https://i.imgur.com/0ohnpql.png"
-            lower.contains("nat geo wild") -> "https://upload.wikimedia.org/wikipedia/commons/thumb/2/27/National_Geographic_Wild_logo.svg/960px-National_Geographic_Wild_logo.svg.png"
-            lower.contains("nat geo") || lower.contains("national geographic") -> "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fc/Natgeologo.svg/960px-Natgeologo.svg.png"
-            lower.contains("disney") -> "https://i.imgur.com/UxrAiAe.png"
-            lower.contains("nickelodeon") -> "https://i.imgur.com/E84jnP8.png"
-            lower.contains("nick jr") -> "https://i.imgur.com/E84jnP8.png"
-            lower.contains("nicktoons") -> "https://i.imgur.com/E84jnP8.png"
-            lower.contains("star channel") -> "https://upload.wikimedia.org/wikipedia/commons/thumb/8/89/Star_Channel_2020.svg/960px-Star_Channel_2020.svg.png"
-            lower.contains("star crime") -> "https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/Star_Crime_2023.svg/960px-Star_Crime_2023.svg.png"
-            lower.contains("star life") -> "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f9/Star_Life_2021.svg/960px-Star_Life_2021.svg.png"
-            lower.contains("axn black") -> "https://i.imgur.com/Peo1QiZ.png"
-            lower.contains("axn white") -> "https://i.imgur.com/47IKxmt.png"
-            lower.contains("axn") -> "https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/AXN_logo_%282015%29.svg/960px-AXN_logo_%282015%29.svg.png"
-            lower.contains("bloomberg") -> "https://i.imgur.com/cHwOVqk.png"
-            lower.contains("bulgaria on air") -> "https://i.imgur.com/mvShl7F.png"
-            lower.contains("the voice") -> "https://i.imgur.com/OoJSmoj.png"
-            lower.contains("city tv") -> "https://i.imgur.com/mFL452f.png"
-            lower.contains("code fashion") -> "https://i.imgur.com/mVc2g64.png"
-            lower.contains("dstv") -> "https://i.imgur.com/YMgzzkf.png"
-            lower.contains("euronews") -> "https://i.imgur.com/RrQVoOg.png"
-            lower.contains("78 tv") || lower.contains("7/8 tv") -> "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1c/Seven-Eight-TV.png/960px-Seven-Eight-TV.png"
-            lower.contains("tiankov") -> "https://i.imgur.com/VKY4q64.png"
-            lower.contains("travel tv") -> "https://i.imgur.com/5xllfed.png"
+            lower.contains("bnt 1") -> "$rawLogoBase/bnt1.png"
+            lower.contains("bnt 2") -> "$rawLogoBase/bnt2.png"
+            lower.contains("bnt 3") -> "$rawLogoBase/bnt3.png"
+            lower.contains("bnt 4") -> "$rawLogoBase/bnt4.png"
+            lower.contains("btv hd") || (lower.contains("btv") && !lower.contains("action") && !lower.contains("cinema") && !lower.contains("comedy") && !lower.contains("story")) -> "$rawLogoBase/btvhd.png"
+            lower.contains("nova tv") || lower == "nova" || lower.contains("nova hd") -> "$rawLogoBase/nova.png"
+            lower.contains("bulgaria on air") -> "$rawLogoBase/bulgaria_on_air.png"
+            lower.contains("kanal 3") -> "$rawLogoBase/kanal3.png"
+            lower.contains("78 tv") || lower.contains("7/8 tv") -> "$rawLogoBase/78tv.png"
+            lower.contains("skat") -> "$rawLogoBase/skat.png"
+            lower.contains("vtk") -> "$rawLogoBase/vtk.png"
+            lower.contains("evrokom") -> "$rawLogoBase/evrokom.png"
             else -> if (defaultImg.isNotEmpty()) fixUrl(defaultImg) else defaultPoster
         }
     }
 
-    // 1. MAIN PAGE: List all live channels with categories and HD logos
+    // 1. MAIN PAGE: List all live channels with categories and 256x256 HD logos
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val channelList = mutableListOf<SearchResponse>()
         val htmlResponse = app.get("$mainUrl/", headers = browserHeaders).text
@@ -133,7 +101,7 @@ class ExampleProvider : MainAPI() {
         return newHomePageResponse(request, channelList)
     }
 
-    // 2. SEARCH: Search across all channels with HD logos
+    // 2. SEARCH: Search across all channels with 256x256 HD logos
     override suspend fun search(query: String): List<SearchResponse> {
         val searchList = mutableListOf<SearchResponse>()
         val htmlResponse = app.get("$mainUrl/", headers = browserHeaders).text
