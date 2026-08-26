@@ -2,6 +2,8 @@ package com.example
 
 import android.net.Uri
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.cloudstream3.network.requestCreator
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
@@ -31,10 +33,48 @@ class ExampleProvider : MainAPI() {
         "Accept-Language" to "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
     )
 
+    /**
+     * Helper to fetch HTML content. If Cloudflare IUAM/Turnstile challenge is detected (403/503/Just a moment),
+     * it automatically triggers CloudStream's WebViewResolver to bypass the anti-bot protection.
+     */
+    private suspend fun fetchHtml(url: String): String {
+        return try {
+            val response = app.get(url, headers = browserHeaders)
+            val body = response.text
+            val isChallenge = response.code in listOf(403, 503) ||
+                    body.contains("Just a moment...", ignoreCase = true) ||
+                    body.contains("cf-chl-bypass", ignoreCase = true) ||
+                    body.contains("cf-turnstile", ignoreCase = true)
+
+            if (isChallenge) {
+                // Cloudflare bypass via headless WebViewResolver
+                val webViewResponse = WebViewResolver(
+                    interceptUrl = Regex("""$mainUrl.*""")
+                ).resolveUsingWebView(
+                    requestCreator(method = "GET", url = url, referer = "$mainUrl/", headers = browserHeaders)
+                )
+                webViewResponse.first?.body ?: body
+            } else {
+                body
+            }
+        } catch (e: Exception) {
+            try {
+                val webViewResponse = WebViewResolver(
+                    interceptUrl = Regex("""$mainUrl.*""")
+                ).resolveUsingWebView(
+                    requestCreator(method = "GET", url = url, referer = "$mainUrl/", headers = browserHeaders)
+                )
+                webViewResponse.first?.body ?: ""
+            } catch (e2: Exception) {
+                ""
+            }
+        }
+    }
+
     // 1. MAIN PAGE: List all live channels from the homepage tabs
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val channelList = mutableListOf<SearchResponse>()
-        val htmlResponse = app.get("$mainUrl/", headers = browserHeaders).text
+        val htmlResponse = fetchHtml("$mainUrl/")
         val document = Jsoup.parse(htmlResponse)
 
         val selector = when (request.data) {
@@ -69,7 +109,7 @@ class ExampleProvider : MainAPI() {
     // 2. SEARCH: Search across all channels
     override suspend fun search(query: String): List<SearchResponse> {
         val searchList   = mutableListOf<SearchResponse>()
-        val htmlResponse = app.get("$mainUrl/", headers = browserHeaders).text
+        val htmlResponse = fetchHtml("$mainUrl/")
         val document     = Jsoup.parse(htmlResponse)
 
         document.select("a.channel-item").forEach { element ->
@@ -92,7 +132,7 @@ class ExampleProvider : MainAPI() {
 
     // 3. LOAD: Return live stream details for UI
     override suspend fun load(url: String): LoadResponse {
-        val htmlResponse = app.get(url, headers = browserHeaders).text
+        val htmlResponse = fetchHtml(url)
         val document     = Jsoup.parse(htmlResponse)
         val title        = document.title().trim().ifEmpty { "Canlı Kanal" }
         val poster       = document.select("meta[property=og:image]").attr("content").ifEmpty { defaultPoster }
@@ -107,25 +147,14 @@ class ExampleProvider : MainAPI() {
         }
     }
 
-    // 4. LOAD LINKS: Extract live HLS stream URLs
+    // 4. LOAD LINKS: Extract live HLS stream URLs with Cloudflare & Bot bypass
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val pageHtml = try {
-            app.get(data, headers = browserHeaders).text
-        } catch (e: Exception) {
-            ""
-        }
-
-        // 1. Extract dynamic baseUrl from page CONFIG script, e.g. "https://2i4.d72577a9dd0ec71.cfd/"
-        val baseUrlRegex = Regex("""baseUrl\s*:\s*['"]([^'"]+)['"]""")
-        val baseUrl = baseUrlRegex.find(pageHtml)?.groupValues?.get(1) ?: "https://2i4.d72577a9dd0ec71.cfd/"
-
-        // 2. Extract channel id from page URL (e.g. ?id=patron)
-        val channelId = Uri.parse(data).getQueryParameter("id")
+        val pageHtml = fetchHtml(data)
 
         val streamHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -133,6 +162,13 @@ class ExampleProvider : MainAPI() {
             "Origin"     to mainUrl,
             "Accept"     to "*/*"
         )
+
+        var foundLink = false
+
+        // 1. Direct Extraction via page CONFIG script (Fast Path)
+        val baseUrlRegex = Regex("""baseUrl\s*:\s*['"]([^'"]+)['"]""")
+        val baseUrl = baseUrlRegex.find(pageHtml)?.groupValues?.get(1) ?: "https://2i4.d72577a9dd0ec71.cfd/"
+        val channelId = Uri.parse(data).getQueryParameter("id")
 
         if (!channelId.isNullOrEmpty()) {
             val primaryStreamUrl = if (channelId.startsWith("http://") || channelId.startsWith("https://")) {
@@ -170,31 +206,60 @@ class ExampleProvider : MainAPI() {
                 )
             }
 
-            return true
+            foundLink = true
         }
 
-        // 3. Fallback: match any .m3u8 that is not a betting ad
-        val m3u8Regex = Regex("""https?://[^\s"'<>]+?\.m3u8[^\s"'<>]*""")
-        val matchedUrl = m3u8Regex.findAll(pageHtml)
-            .map { it.value }
-            .firstOrNull { !it.contains("video.bsky.app") && !it.contains("preroll") }
+        // 2. Cloudflare / Anti-Bot Bypass via WebViewResolver (Full Interceptor)
+        try {
+            val resolvedUrl = WebViewResolver(
+                interceptUrl = Regex("""\.m3u8""")
+            ).resolveUsingWebView(
+                requestCreator(method = "GET", url = data, referer = "$mainUrl/", headers = browserHeaders)
+            ).first?.url
 
-        if (!matchedUrl.isNullOrEmpty()) {
-            callback.invoke(
-                newExtractorLink(
-                    source  = name,
-                    name    = "$name - Canlı Yayın",
-                    url     = matchedUrl,
-                    type    = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = "$mainUrl/"
-                    this.headers = streamHeaders
-                    this.quality = Qualities.P1080.value
-                }
-            )
-            return true
+            if (!resolvedUrl.isNullOrEmpty() && !resolvedUrl.contains("video.bsky.app") && !resolvedUrl.contains("preroll")) {
+                callback.invoke(
+                    newExtractorLink(
+                        source  = name,
+                        name    = "$name - Canlı Yayın (Bypass)",
+                        url     = resolvedUrl,
+                        type    = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "$mainUrl/"
+                        this.headers = streamHeaders
+                        this.quality = Qualities.P1080.value
+                    }
+                )
+                foundLink = true
+            }
+        } catch (e: Exception) {
+            // Ignore WebView interceptor failure if direct link was already found
         }
 
-        return false
+        // 3. Fallback regex extraction from HTML
+        if (!foundLink && pageHtml.isNotEmpty()) {
+            val m3u8Regex = Regex("""https?://[^\s"'<>]+?\.m3u8[^\s"'<>]*""")
+            val matchedUrl = m3u8Regex.findAll(pageHtml)
+                .map { it.value }
+                .firstOrNull { !it.contains("video.bsky.app") && !it.contains("preroll") }
+
+            if (!matchedUrl.isNullOrEmpty()) {
+                callback.invoke(
+                    newExtractorLink(
+                        source  = name,
+                        name    = "$name - Canlı Yayın",
+                        url     = matchedUrl,
+                        type    = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "$mainUrl/"
+                        this.headers = streamHeaders
+                        this.quality = Qualities.P1080.value
+                    }
+                )
+                foundLink = true
+            }
+        }
+
+        return foundLink
     }
 }
