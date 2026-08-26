@@ -1,13 +1,12 @@
 package com.example
 
+import android.net.Uri
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.network.WebViewResolver
 import org.jsoup.Jsoup
-import java.net.URI
 
 class ExampleProvider : MainAPI() {
     override var mainUrl = "https://inattv1321.xyz"
@@ -67,7 +66,7 @@ class ExampleProvider : MainAPI() {
         return newHomePageResponse(request, channelList)
     }
 
-    // 2. SEARCH
+    // 2. SEARCH: Search across all channels
     override suspend fun search(query: String): List<SearchResponse> {
         val searchList   = mutableListOf<SearchResponse>()
         val htmlResponse = app.get("$mainUrl/", headers = browserHeaders).text
@@ -91,7 +90,7 @@ class ExampleProvider : MainAPI() {
         return searchList
     }
 
-    // 3. LOAD: Return a LiveStreamLoadResponse pointing to the channel.html page URL
+    // 3. LOAD: Return live stream details for UI
     override suspend fun load(url: String): LoadResponse {
         val htmlResponse = app.get(url, headers = browserHeaders).text
         val document     = Jsoup.parse(htmlResponse)
@@ -104,37 +103,92 @@ class ExampleProvider : MainAPI() {
             dataUrl = url
         ) {
             this.posterUrl = poster
-            this.plot      = "İnat TV – Canlı yayın."
+            this.plot      = "İnat TV – 7/24 Kesintisiz Canlı TV yayını."
         }
     }
 
-    // 4. LOAD LINKS: Use WebViewResolver to intercept the real HLS .m3u8 stream
+    // 4. LOAD LINKS: Extract live HLS stream URLs
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        val pageHtml = try {
+            app.get(data, headers = browserHeaders).text
+        } catch (e: Exception) {
+            ""
+        }
 
-        // The channel page (e.g. /channel.html?id=patron) loads an iframe that
-        // sets up a Clappr player pointing to an HLS stream on the CDN.
-        // We use WebViewResolver to intercept any .m3u8 request fired by the page.
+        // 1. Extract dynamic baseUrl from page CONFIG script, e.g. "https://2i4.d72577a9dd0ec71.cfd/"
+        val baseUrlRegex = Regex("""baseUrl\s*:\s*['"]([^'"]+)['"]""")
+        val baseUrl = baseUrlRegex.find(pageHtml)?.groupValues?.get(1) ?: "https://2i4.d72577a9dd0ec71.cfd/"
 
-        val resolvedUrl = WebViewResolver(
-            interceptUrl = Regex("""\.m3u8""")
-        ).resolveUsingWebView(
-            requestCreator(method = "GET", url = data, referer = mainUrl, headers = browserHeaders)
-        ).first?.url
+        // 2. Extract channel id from page URL (e.g. ?id=patron)
+        val channelId = Uri.parse(data).getQueryParameter("id")
 
-        if (!resolvedUrl.isNullOrEmpty() && !resolvedUrl.contains("video.bsky.app")) {
+        val streamHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer"    to "$mainUrl/",
+            "Origin"     to mainUrl,
+            "Accept"     to "*/*"
+        )
+
+        if (!channelId.isNullOrEmpty()) {
+            val primaryStreamUrl = if (channelId.startsWith("http://") || channelId.startsWith("https://")) {
+                channelId
+            } else {
+                "${baseUrl.trimEnd('/')}/$channelId/mono.m3u8"
+            }
+
             callback.invoke(
                 newExtractorLink(
-                    source = name,
-                    name   = name,
-                    url    = resolvedUrl,
-                    type   = ExtractorLinkType.M3U8
+                    source  = name,
+                    name    = "$name - Canlı Yayın",
+                    url     = primaryStreamUrl,
+                    type    = ExtractorLinkType.M3U8
                 ) {
-                    this.referer = mainUrl
+                    this.referer = "$mainUrl/"
+                    this.headers = streamHeaders
+                    this.quality = Qualities.P1080.value
+                }
+            )
+
+            val directStreamUrl = "https://d72577a9dd0ec71.cfd/$channelId/mono.m3u8"
+            if (directStreamUrl != primaryStreamUrl) {
+                callback.invoke(
+                    newExtractorLink(
+                        source  = name,
+                        name    = "$name - Yedek Sunucu",
+                        url     = directStreamUrl,
+                        type    = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = "$mainUrl/"
+                        this.headers = streamHeaders
+                        this.quality = Qualities.P1080.value
+                    }
+                )
+            }
+
+            return true
+        }
+
+        // 3. Fallback: match any .m3u8 that is not a betting ad
+        val m3u8Regex = Regex("""https?://[^\s"'<>]+?\.m3u8[^\s"'<>]*""")
+        val matchedUrl = m3u8Regex.findAll(pageHtml)
+            .map { it.value }
+            .firstOrNull { !it.contains("video.bsky.app") && !it.contains("preroll") }
+
+        if (!matchedUrl.isNullOrEmpty()) {
+            callback.invoke(
+                newExtractorLink(
+                    source  = name,
+                    name    = "$name - Canlı Yayın",
+                    url     = matchedUrl,
+                    type    = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = "$mainUrl/"
+                    this.headers = streamHeaders
                     this.quality = Qualities.P1080.value
                 }
             )
