@@ -1,12 +1,13 @@
 package com.example
 
-import android.net.Uri
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.network.WebViewResolver
 import org.jsoup.Jsoup
+import java.net.URI
 
 class ExampleProvider : MainAPI() {
     override var mainUrl = "https://inattv1321.xyz"
@@ -23,25 +24,24 @@ class ExampleProvider : MainAPI() {
 
     private val defaultPoster = "https://upload.wikimedia.org/wikipedia/commons/2/2f/Korduene_Logo.png"
 
-    private val requestHeaders = mapOf(
+    private val browserHeaders = mapOf(
         "User-Agent"      to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer"         to "$mainUrl/",
         "Origin"          to mainUrl,
-        "X-Requested-With" to "XMLHttpRequest",
         "Accept"          to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language" to "en-US,en;q=0.9,tr;q=0.8"
+        "Accept-Language" to "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
     )
 
     // 1. MAIN PAGE: List all live channels from the homepage tabs
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val channelList = mutableListOf<SearchResponse>()
-        val htmlResponse = app.get("$mainUrl/", headers = requestHeaders).text
+        val htmlResponse = app.get("$mainUrl/", headers = browserHeaders).text
         val document = Jsoup.parse(htmlResponse)
 
         val selector = when (request.data) {
-            "24-7" -> "#24-7-tab a.channel-item"
+            "24-7"    -> "#24-7-tab a.channel-item"
             "matches" -> "#matches-tab a.channel-item"
-            else -> "a.channel-item"
+            else      -> "a.channel-item"
         }
 
         var elements = document.select(selector)
@@ -50,14 +50,13 @@ class ExampleProvider : MainAPI() {
         }
 
         elements.forEach { element ->
-            val title = element.select(".channel-name").text().trim()
+            val title      = element.select(".channel-name").text().trim()
             val channelUrl = element.attr("href")
-
             if (title.isNotEmpty() && channelUrl.isNotEmpty()) {
                 channelList.add(
                     newLiveSearchResponse(
                         name = title,
-                        url = fixUrl(channelUrl),
+                        url  = fixUrl(channelUrl),
                         type = TvType.Live
                     ) {
                         this.posterUrl = defaultPoster
@@ -68,21 +67,20 @@ class ExampleProvider : MainAPI() {
         return newHomePageResponse(request, channelList)
     }
 
-    // 2. SEARCH: Handle search queries across all channels
+    // 2. SEARCH
     override suspend fun search(query: String): List<SearchResponse> {
-        val searchList = mutableListOf<SearchResponse>()
-        val htmlResponse = app.get("$mainUrl/", headers = requestHeaders).text
-        val document = Jsoup.parse(htmlResponse)
+        val searchList   = mutableListOf<SearchResponse>()
+        val htmlResponse = app.get("$mainUrl/", headers = browserHeaders).text
+        val document     = Jsoup.parse(htmlResponse)
 
         document.select("a.channel-item").forEach { element ->
-            val title = element.select(".channel-name").text().trim()
+            val title      = element.select(".channel-name").text().trim()
             val channelUrl = element.attr("href")
-
             if (title.isNotEmpty() && title.lowercase().contains(query.lowercase())) {
                 searchList.add(
                     newLiveSearchResponse(
                         name = title,
-                        url = fixUrl(channelUrl),
+                        url  = fixUrl(channelUrl),
                         type = TvType.Live
                     ) {
                         this.posterUrl = defaultPoster
@@ -93,107 +91,50 @@ class ExampleProvider : MainAPI() {
         return searchList
     }
 
-    // 3. LOAD: Prepare the player UI when a channel is selected
+    // 3. LOAD: Return a LiveStreamLoadResponse pointing to the channel.html page URL
     override suspend fun load(url: String): LoadResponse {
-        val htmlResponse = app.get(url, headers = requestHeaders).text
-        val document = Jsoup.parse(htmlResponse)
-        val title = document.select("h1.entry-title, .channel-title").text().trim().ifEmpty { "Canlı Kanal" }
-        val poster = document.select("meta[property=og:image]").attr("content").ifEmpty { defaultPoster }
+        val htmlResponse = app.get(url, headers = browserHeaders).text
+        val document     = Jsoup.parse(htmlResponse)
+        val title        = document.title().trim().ifEmpty { "Canlı Kanal" }
+        val poster       = document.select("meta[property=og:image]").attr("content").ifEmpty { defaultPoster }
 
         return newLiveStreamLoadResponse(
-            name = title,
-            url = url,
+            name    = title,
+            url     = url,
             dataUrl = url
         ) {
             this.posterUrl = poster
-            this.plot = "$title – 7/24 Kesintisiz Canlı TV yayını."
+            this.plot      = "İnat TV – Canlı yayın."
         }
     }
 
-    // 4. LOAD LINKS: Extract real stream URLs and provide multi-server options
+    // 4. LOAD LINKS: Use WebViewResolver to intercept the real HLS .m3u8 stream
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val pageHtml = try {
-            app.get(data, headers = requestHeaders).text
-        } catch (e: Exception) {
-            ""
-        }
 
-        // 1. Extract dynamic baseUrl from page CONFIG script, e.g. "https://2i4.d72577a9dd0ec71.cfd/"
-        val baseUrlRegex = Regex("""baseUrl\s*:\s*['"]([^'"]+)['"]""")
-        val baseUrl = baseUrlRegex.find(pageHtml)?.groupValues?.get(1) ?: "https://2i4.d72577a9dd0ec71.cfd/"
+        // The channel page (e.g. /channel.html?id=patron) loads an iframe that
+        // sets up a Clappr player pointing to an HLS stream on the CDN.
+        // We use WebViewResolver to intercept any .m3u8 request fired by the page.
 
-        // 2. Extract channel id from page URL (e.g. ?id=patron)
-        val channelId = Uri.parse(data).getQueryParameter("id")
+        val resolvedUrl = WebViewResolver(
+            interceptUrl = Regex("""\.m3u8""")
+        ).resolveUsingWebView(
+            requestCreator(method = "GET", url = data, referer = mainUrl, headers = browserHeaders)
+        ).first?.url
 
-        val streamHeaders = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer" to "$mainUrl/",
-            "Origin" to mainUrl,
-            "Accept" to "*/*"
-        )
-
-        if (!channelId.isNullOrEmpty()) {
-            val primaryStreamUrl = if (channelId.startsWith("http://") || channelId.startsWith("https://")) {
-                channelId
-            } else {
-                "${baseUrl.trimEnd('/')}/$channelId/mono.m3u8"
-            }
-
-            // Primary server from dynamic baseUrl
+        if (!resolvedUrl.isNullOrEmpty() && !resolvedUrl.contains("video.bsky.app")) {
             callback.invoke(
                 newExtractorLink(
                     source = name,
-                    name = "$name - Canlı Yayın",
-                    url = primaryStreamUrl,
-                    type = ExtractorLinkType.M3U8
+                    name   = name,
+                    url    = resolvedUrl,
+                    type   = ExtractorLinkType.M3U8
                 ) {
-                    this.referer = "$mainUrl/"
-                    this.headers = streamHeaders
-                    this.quality = Qualities.P1080.value
-                }
-            )
-
-            // Direct fallback server without subdomain
-            val directStreamUrl = "https://d72577a9dd0ec71.cfd/$channelId/mono.m3u8"
-            if (directStreamUrl != primaryStreamUrl) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = "$name - Yedek Sunucu",
-                        url = directStreamUrl,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "$mainUrl/"
-                        this.headers = streamHeaders
-                        this.quality = Qualities.P1080.value
-                    }
-                )
-            }
-
-            return true
-        }
-
-        // 3. Fallback: only match .m3u8 that are NOT bet preroll ad videos
-        val m3u8Regex = Regex("""https?://[^\s"'<>]+?\.m3u8[^\s"'<>]*""")
-        val matchedUrl = m3u8Regex.findAll(pageHtml)
-            .map { it.value }
-            .firstOrNull { !it.contains("video.bsky.app") && !it.contains("preroll") }
-
-        if (!matchedUrl.isNullOrEmpty()) {
-            callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name = "$name - Canlı Yayın",
-                    url = matchedUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = "$mainUrl/"
-                    this.headers = streamHeaders
+                    this.referer = mainUrl
                     this.quality = Qualities.P1080.value
                 }
             )
