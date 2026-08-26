@@ -11,7 +11,7 @@ import org.jsoup.Jsoup
 
 class ExampleProvider : MainAPI() {
     override var mainUrl = "https://inattv1321.xyz"
-    override var name = "İnat TV"
+    override var name = "Canlı TV"
     override val supportedTypes = setOf(TvType.Live)
     override var lang = "tr"
     override val hasMainPage = true
@@ -22,93 +22,168 @@ class ExampleProvider : MainAPI() {
         Pair("all", "Tüm Kanallar")
     )
 
+    private val sheetUrl = "https://docs.google.com/spreadsheets/d/1IHYlgjzhLCX3MKhewg7FGTf_oIkNlXzl2ogYXkSRjFM/export?format=csv"
     private val defaultPoster = "https://upload.wikimedia.org/wikipedia/commons/2/2f/Korduene_Logo.png"
 
     private val browserHeaders = mapOf(
         "User-Agent"      to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Referer"         to "$mainUrl/",
-        "Origin"          to mainUrl,
         "Accept"          to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language" to "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
     )
 
-    // Helper to fetch HTML content with Cloudflare / Bot bypass fallback
-    private suspend fun fetchHtml(url: String): String {
+    /**
+     * Dynamically fetches source URLs/domains or custom channels from the Google Sheet CSV
+     */
+    private suspend fun getSources(): List<String> {
         return try {
-            val response = app.get(url, headers = browserHeaders)
+            val response = app.get(sheetUrl).text
+            response.lines()
+                .map { it.trim().trim('"').trim() }
+                .filter { it.isNotEmpty() && !it.startsWith("#") }
+        } catch (e: Exception) {
+            listOf(mainUrl)
+        }
+    }
+
+    private suspend fun fetchHtml(url: String, domain: String): String {
+        val headers = browserHeaders + mapOf(
+            "Referer" to "$domain/",
+            "Origin"  to domain
+        )
+        return try {
+            val response = app.get(url, headers = headers)
             val body = response.text
             val isChallenge = response.code in listOf(403, 503) ||
                     body.contains("Just a moment...", ignoreCase = true) ||
                     body.contains("cf-chl-bypass", ignoreCase = true)
 
             if (isChallenge) {
-                app.get(url, headers = browserHeaders, interceptor = WebViewResolver(Regex("""$mainUrl.*"""))).text
+                app.get(url, headers = headers, interceptor = WebViewResolver(Regex("""$domain.*"""))).text
             } else {
                 body
             }
         } catch (e: Exception) {
             try {
-                app.get(url, headers = browserHeaders, interceptor = WebViewResolver(Regex("""$mainUrl.*"""))).text
+                app.get(url, headers = headers, interceptor = WebViewResolver(Regex("""$domain.*"""))).text
             } catch (e2: Exception) {
                 ""
             }
         }
     }
 
-    // 1. MAIN PAGE: List all live channels from the homepage tabs
+    // 1. MAIN PAGE: List all live channels from all active sources
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val channelList = mutableListOf<SearchResponse>()
-        val htmlResponse = fetchHtml("$mainUrl/")
-        val document = Jsoup.parse(htmlResponse)
+        val sources = getSources()
 
-        val selector = when (request.data) {
-            "24-7"    -> "#24-7-tab a.channel-item"
-            "matches" -> "#matches-tab a.channel-item"
-            else      -> "a.channel-item"
-        }
+        for (source in sources) {
+            // Check if this source row is a direct CSV channel (Name, URL, Poster)
+            if (source.contains(",") && !source.startsWith("http://") && !source.startsWith("https://")) {
+                val parts = source.split(",").map { it.trim() }
+                if (parts.size >= 2) {
+                    val title = parts[0]
+                    val streamUrl = parts[1]
+                    val poster = if (parts.size >= 3 && parts[2].isNotEmpty()) parts[2] else defaultPoster
+                    channelList.add(
+                        newLiveSearchResponse(
+                            name = title,
+                            url  = streamUrl,
+                            type = TvType.Live
+                        ) {
+                            this.posterUrl = poster
+                        }
+                    )
+                }
+                continue
+            }
 
-        var elements = document.select(selector)
-        if (elements.isEmpty()) {
-            elements = document.select("a.channel-item")
-        }
+            // Otherwise treat source as a portal domain
+            val domain = source.trimEnd('/')
+            val htmlResponse = fetchHtml("$domain/", domain)
+            if (htmlResponse.isEmpty()) continue
 
-        elements.forEach { element ->
-            val title      = element.select(".channel-name").text().trim()
-            val channelUrl = element.attr("href")
-            if (title.isNotEmpty() && channelUrl.isNotEmpty()) {
-                channelList.add(
-                    newLiveSearchResponse(
-                        name = title,
-                        url  = fixUrl(channelUrl),
-                        type = TvType.Live
-                    ) {
-                        this.posterUrl = defaultPoster
+            val document = Jsoup.parse(htmlResponse)
+            val selector = when (request.data) {
+                "24-7"    -> "#24-7-tab a.channel-item"
+                "matches" -> "#matches-tab a.channel-item"
+                else      -> "a.channel-item"
+            }
+
+            var elements = document.select(selector)
+            if (elements.isEmpty()) {
+                elements = document.select("a.channel-item")
+            }
+
+            elements.forEach { element ->
+                val title      = element.select(".channel-name").text().trim()
+                val channelUrl = element.attr("href")
+                if (title.isNotEmpty() && channelUrl.isNotEmpty()) {
+                    val fullUrl = if (channelUrl.startsWith("http")) channelUrl else "$domain/${channelUrl.trimStart('/')}"
+                    if (channelList.none { it.url == fullUrl || it.name == title }) {
+                        channelList.add(
+                            newLiveSearchResponse(
+                                name = title,
+                                url  = fullUrl,
+                                type = TvType.Live
+                            ) {
+                                this.posterUrl = defaultPoster
+                            }
+                        )
                     }
-                )
+                }
             }
         }
+
         return newHomePageResponse(request, channelList)
     }
 
-    // 2. SEARCH: Search across all channels
+    // 2. SEARCH: Search across all active channels
     override suspend fun search(query: String): List<SearchResponse> {
-        val searchList   = mutableListOf<SearchResponse>()
-        val htmlResponse = fetchHtml("$mainUrl/")
-        val document     = Jsoup.parse(htmlResponse)
+        val searchList = mutableListOf<SearchResponse>()
+        val sources = getSources()
 
-        document.select("a.channel-item").forEach { element ->
-            val title      = element.select(".channel-name").text().trim()
-            val channelUrl = element.attr("href")
-            if (title.isNotEmpty() && title.lowercase().contains(query.lowercase())) {
-                searchList.add(
-                    newLiveSearchResponse(
-                        name = title,
-                        url  = fixUrl(channelUrl),
-                        type = TvType.Live
-                    ) {
-                        this.posterUrl = defaultPoster
+        for (source in sources) {
+            if (source.contains(",") && !source.startsWith("http://") && !source.startsWith("https://")) {
+                val parts = source.split(",").map { it.trim() }
+                if (parts.size >= 2 && parts[0].lowercase().contains(query.lowercase())) {
+                    val title = parts[0]
+                    val streamUrl = parts[1]
+                    val poster = if (parts.size >= 3 && parts[2].isNotEmpty()) parts[2] else defaultPoster
+                    searchList.add(
+                        newLiveSearchResponse(
+                            name = title,
+                            url  = streamUrl,
+                            type = TvType.Live
+                        ) {
+                            this.posterUrl = poster
+                        }
+                    )
+                }
+                continue
+            }
+
+            val domain = source.trimEnd('/')
+            val htmlResponse = fetchHtml("$domain/", domain)
+            if (htmlResponse.isEmpty()) continue
+
+            val document = Jsoup.parse(htmlResponse)
+            document.select("a.channel-item").forEach { element ->
+                val title      = element.select(".channel-name").text().trim()
+                val channelUrl = element.attr("href")
+                if (title.isNotEmpty() && title.lowercase().contains(query.lowercase())) {
+                    val fullUrl = if (channelUrl.startsWith("http")) channelUrl else "$domain/${channelUrl.trimStart('/')}"
+                    if (searchList.none { it.url == fullUrl }) {
+                        searchList.add(
+                            newLiveSearchResponse(
+                                name = title,
+                                url  = fullUrl,
+                                type = TvType.Live
+                            ) {
+                                this.posterUrl = defaultPoster
+                            }
+                        )
                     }
-                )
+                }
             }
         }
         return searchList
@@ -116,10 +191,18 @@ class ExampleProvider : MainAPI() {
 
     // 3. LOAD: Return live stream details for UI
     override suspend fun load(url: String): LoadResponse {
-        val htmlResponse = fetchHtml(url)
-        val document     = Jsoup.parse(htmlResponse)
-        val title        = document.title().trim().ifEmpty { "Canlı Kanal" }
-        val poster       = document.select("meta[property=og:image]").attr("content").ifEmpty { defaultPoster }
+        val uri = Uri.parse(url)
+        val domain = if (uri.host != null) "${uri.scheme}://${uri.host}" else mainUrl
+
+        val (title, poster) = if (url.endsWith(".m3u8") || url.contains("mono.m3u8")) {
+            Pair("Canlı Yayın", defaultPoster)
+        } else {
+            val htmlResponse = fetchHtml(url, domain)
+            val document     = Jsoup.parse(htmlResponse)
+            val t = document.title().trim().ifEmpty { "Canlı Kanal" }
+            val p = document.select("meta[property=og:image]").attr("content").ifEmpty { defaultPoster }
+            Pair(t, p)
+        }
 
         return newLiveStreamLoadResponse(
             name    = title,
@@ -127,29 +210,46 @@ class ExampleProvider : MainAPI() {
             dataUrl = url
         ) {
             this.posterUrl = poster
-            this.plot      = "İnat TV – 7/24 Kesintisiz Canlı TV yayını."
+            this.plot      = "Canlı TV – Kesintisiz Yayın Akışı."
         }
     }
 
-    // 4. LOAD LINKS: Extract live HLS stream URLs with Cloudflare & Bot bypass
+    // 4. LOAD LINKS: Extract live stream URLs
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val pageHtml = fetchHtml(data)
+        // Direct M3U8 link
+        if (data.endsWith(".m3u8") || data.contains(".m3u8?")) {
+            callback.invoke(
+                newExtractorLink(
+                    source  = name,
+                    name    = "$name - Doğrudan Akış",
+                    url     = data,
+                    type    = ExtractorLinkType.M3U8
+                ) {
+                    this.quality = Qualities.P1080.value
+                }
+            )
+            return true
+        }
+
+        val uri = Uri.parse(data)
+        val domain = if (uri.host != null) "${uri.scheme}://${uri.host}" else mainUrl
+        val pageHtml = fetchHtml(data, domain)
 
         val streamHeaders = mapOf(
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer"    to "$mainUrl/",
-            "Origin"     to mainUrl,
+            "Referer"    to "$domain/",
+            "Origin"     to domain,
             "Accept"     to "*/*"
         )
 
         var foundLink = false
 
-        // 1. Direct Extraction via page CONFIG script (Fast Path)
+        // 1. Direct Extraction via page CONFIG script
         val baseUrlRegex = Regex("""baseUrl\s*:\s*['"]([^'"]+)['"]""")
         val baseUrl = baseUrlRegex.find(pageHtml)?.groupValues?.get(1) ?: "https://2i4.d72577a9dd0ec71.cfd/"
         val channelId = Uri.parse(data).getQueryParameter("id")
@@ -168,26 +268,28 @@ class ExampleProvider : MainAPI() {
                     url     = primaryStreamUrl,
                     type    = ExtractorLinkType.M3U8
                 ) {
-                    this.referer = "$mainUrl/"
+                    this.referer = "$domain/"
                     this.headers = streamHeaders
                     this.quality = Qualities.P1080.value
                 }
             )
 
-            val directStreamUrl = "https://d72577a9dd0ec71.cfd/$channelId/mono.m3u8"
-            if (directStreamUrl != primaryStreamUrl) {
-                callback.invoke(
-                    newExtractorLink(
-                        source  = name,
-                        name    = "$name - Yedek Sunucu",
-                        url     = directStreamUrl,
-                        type    = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = "$mainUrl/"
-                        this.headers = streamHeaders
-                        this.quality = Qualities.P1080.value
-                    }
-                )
+            if (primaryStreamUrl.contains(".cfd/")) {
+                val directStreamUrl = "https://d72577a9dd0ec71.cfd/$channelId/mono.m3u8"
+                if (directStreamUrl != primaryStreamUrl) {
+                    callback.invoke(
+                        newExtractorLink(
+                            source  = name,
+                            name    = "$name - Yedek Sunucu",
+                            url     = directStreamUrl,
+                            type    = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = "$domain/"
+                            this.headers = streamHeaders
+                            this.quality = Qualities.P1080.value
+                        }
+                    )
+                }
             }
 
             foundLink = true
@@ -195,7 +297,7 @@ class ExampleProvider : MainAPI() {
 
         // 2. Cloudflare / Anti-Bot Bypass via WebViewResolver
         try {
-            val webViewRes = app.get(data, headers = browserHeaders, interceptor = WebViewResolver(Regex("""\.m3u8""")))
+            val webViewRes = app.get(data, headers = streamHeaders, interceptor = WebViewResolver(Regex("""\.m3u8""")))
             val resolvedUrl = webViewRes.url
 
             if (resolvedUrl.isNotEmpty() && resolvedUrl.contains(".m3u8") && !resolvedUrl.contains("video.bsky.app") && !resolvedUrl.contains("preroll")) {
@@ -206,7 +308,7 @@ class ExampleProvider : MainAPI() {
                         url     = resolvedUrl,
                         type    = ExtractorLinkType.M3U8
                     ) {
-                        this.referer = "$mainUrl/"
+                        this.referer = "$domain/"
                         this.headers = streamHeaders
                         this.quality = Qualities.P1080.value
                     }
@@ -232,7 +334,7 @@ class ExampleProvider : MainAPI() {
                         url     = matchedUrl,
                         type    = ExtractorLinkType.M3U8
                     ) {
-                        this.referer = "$mainUrl/"
+                        this.referer = "$domain/"
                         this.headers = streamHeaders
                         this.quality = Qualities.P1080.value
                     }
