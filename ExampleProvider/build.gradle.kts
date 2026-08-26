@@ -4,11 +4,11 @@ dependencies {
 }
 
 // Sürüm numarasını tam sayı (Integer) olarak belirtiyoruz
-version = 7
+version = 8
 
 cloudstream {
     // Eklentimizin uygulamanın uzantılar sayfasında görünecek bilgileri
-    description = "İnat TV üzerindeki 7/24 canlı TV kanallarını ve beIN Sports yayınlarını izlemenizi sağlar."
+    description = "SeirSanduk TV üzerindeki canlı TV, spor, film ve çocuk kanallarını kesintisiz izlemenizi sağlar."
     authors = listOf("bushidoxyz")
 
     /**
@@ -24,10 +24,9 @@ cloudstream {
     tvTypes = listOf("Live")
 
     requiresResources = true
-    language = "tr"
+    language = "bg"
 
-    // İnat TV için ilettiğin görsel bağlantısını ikon olarak tanımlıyoruz
-    iconUrl = "https://upload.wikimedia.org/wikipedia/commons/2/2f/Korduene_Logo.png"
+    iconUrl = "https://www.seirsanduk.online/images/logo.png"
 }
 
 android {
