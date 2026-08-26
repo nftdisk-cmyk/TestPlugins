@@ -3,7 +3,6 @@ package com.example
 import android.net.Uri
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.WebViewResolver
-import com.lagradost.cloudstream3.network.requestCreator
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
@@ -33,38 +32,23 @@ class ExampleProvider : MainAPI() {
         "Accept-Language" to "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
     )
 
-    /**
-     * Helper to fetch HTML content. If Cloudflare IUAM/Turnstile challenge is detected (403/503/Just a moment),
-     * it automatically triggers CloudStream's WebViewResolver to bypass the anti-bot protection.
-     */
+    // Helper to fetch HTML content with Cloudflare / Bot bypass fallback
     private suspend fun fetchHtml(url: String): String {
         return try {
             val response = app.get(url, headers = browserHeaders)
             val body = response.text
             val isChallenge = response.code in listOf(403, 503) ||
                     body.contains("Just a moment...", ignoreCase = true) ||
-                    body.contains("cf-chl-bypass", ignoreCase = true) ||
-                    body.contains("cf-turnstile", ignoreCase = true)
+                    body.contains("cf-chl-bypass", ignoreCase = true)
 
             if (isChallenge) {
-                // Cloudflare bypass via headless WebViewResolver
-                val webViewResponse = WebViewResolver(
-                    interceptUrl = Regex("""$mainUrl.*""")
-                ).resolveUsingWebView(
-                    requestCreator(method = "GET", url = url, referer = "$mainUrl/", headers = browserHeaders)
-                )
-                webViewResponse.first?.body ?: body
+                app.get(url, headers = browserHeaders, interceptor = WebViewResolver(Regex("""$mainUrl.*"""))).text
             } else {
                 body
             }
         } catch (e: Exception) {
             try {
-                val webViewResponse = WebViewResolver(
-                    interceptUrl = Regex("""$mainUrl.*""")
-                ).resolveUsingWebView(
-                    requestCreator(method = "GET", url = url, referer = "$mainUrl/", headers = browserHeaders)
-                )
-                webViewResponse.first?.body ?: ""
+                app.get(url, headers = browserHeaders, interceptor = WebViewResolver(Regex("""$mainUrl.*"""))).text
             } catch (e2: Exception) {
                 ""
             }
@@ -209,15 +193,12 @@ class ExampleProvider : MainAPI() {
             foundLink = true
         }
 
-        // 2. Cloudflare / Anti-Bot Bypass via WebViewResolver (Full Interceptor)
+        // 2. Cloudflare / Anti-Bot Bypass via WebViewResolver
         try {
-            val resolvedUrl = WebViewResolver(
-                interceptUrl = Regex("""\.m3u8""")
-            ).resolveUsingWebView(
-                requestCreator(method = "GET", url = data, referer = "$mainUrl/", headers = browserHeaders)
-            ).first?.url
+            val webViewRes = app.get(data, headers = browserHeaders, interceptor = WebViewResolver(Regex("""\.m3u8""")))
+            val resolvedUrl = webViewRes.url
 
-            if (!resolvedUrl.isNullOrEmpty() && !resolvedUrl.contains("video.bsky.app") && !resolvedUrl.contains("preroll")) {
+            if (resolvedUrl.isNotEmpty() && resolvedUrl.contains(".m3u8") && !resolvedUrl.contains("video.bsky.app") && !resolvedUrl.contains("preroll")) {
                 callback.invoke(
                     newExtractorLink(
                         source  = name,
