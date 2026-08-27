@@ -33,24 +33,84 @@ class ExampleProvider : MainAPI() {
     )
 
     /**
-     * Maps channel names to custom 256x256 pixel-perfect HD logos.
+     * Maps channel names to custom 200x200 pixel-perfect HD logos from Wikimedia Commons.
      * Falls back to the website thumbnail if no custom HD logo is matched.
      */
     private fun getHighResLogo(title: String, defaultImg: String): String {
         val lower = title.lowercase()
         return when {
+            // BNT family
             lower.contains("bnt 1") -> "$rawLogoBase/bnt1.png"
             lower.contains("bnt 2") -> "$rawLogoBase/bnt2.png"
             lower.contains("bnt 3") -> "$rawLogoBase/bnt3.png"
             lower.contains("bnt 4") -> "$rawLogoBase/bnt4.png"
-            lower.contains("btv hd") || (lower.contains("btv") && !lower.contains("action") && !lower.contains("cinema") && !lower.contains("comedy") && !lower.contains("story")) -> "$rawLogoBase/btvhd.png"
-            lower.contains("nova tv") || lower == "nova" || lower.contains("nova hd") -> "$rawLogoBase/nova.png"
+            // bTV family (specific variants before generic)
+            lower.contains("btv action") -> "$rawLogoBase/btv_action.png"
+            lower.contains("btv cinema") -> "$rawLogoBase/btv_cinema.png"
+            lower.contains("btv comedy") -> "$rawLogoBase/btv_comedy.png"
+            lower.contains("btv story") -> "$rawLogoBase/btv_story.png"
+            lower.contains("btv") -> "$rawLogoBase/btvhd.png"
+            // Nova family (specific before generic)
+            lower.contains("nova news") -> "$rawLogoBase/nova_news.png"
+            lower.contains("nova sport") -> "$rawLogoBase/nova_sport.png"
+            lower.contains("kino nova") -> "$rawLogoBase/kino_nova.png"
+            lower.contains("nova") -> "$rawLogoBase/nova.png"
+            // Diema family
+            lower.contains("diema sport") -> "$rawLogoBase/diema_sport.png"
+            lower.contains("diema family") -> "$rawLogoBase/diema_family.png"
+            lower.contains("diema") -> "$rawLogoBase/diema.png"
+            // Max Sport
+            lower.contains("max sport") -> "$rawLogoBase/diema_sport.png"
+            lower.contains("max one") -> "$rawLogoBase/diema.png"
+            // Sports international
+            lower.contains("eurosport 1") -> "$rawLogoBase/eurosport1.png"
+            lower.contains("eurosport 2") -> "$rawLogoBase/eurosport2.png"
+            lower.contains("ring") -> "$rawLogoBase/diema_sport.png"
+            // Star / AXN (specific before generic)
+            lower.contains("star crime") -> "$rawLogoBase/star_channel.png"
+            lower.contains("star life") -> "$rawLogoBase/star_channel.png"
+            lower.contains("star channel") -> "$rawLogoBase/star_channel.png"
+            lower.contains("axn black") -> "$rawLogoBase/axn_black.png"
+            lower.contains("axn white") -> "$rawLogoBase/axn_white.png"
+            lower.contains("axn") -> "$rawLogoBase/axn.png"
+            lower.contains("epic drama") -> "$rawLogoBase/star_channel.png"
+            // Documentary / Lifestyle
+            lower.contains("nat geo wild") -> "$rawLogoBase/nat_geo_wild.png"
+            lower.contains("nat geo") -> "$rawLogoBase/nat_geo.png"
+            lower.contains("discovery") -> "$rawLogoBase/discovery.png"
+            lower.contains("viasat") -> "$rawLogoBase/viasat_explore.png"
+            lower.contains("id xtra") -> "$rawLogoBase/discovery.png"
+            lower.contains("travel channel") -> "$rawLogoBase/travel_channel.png"
+            lower.contains("travel tv") -> "$rawLogoBase/travel_channel.png"
+            lower.contains("24 kitchen") -> "$rawLogoBase/food_network.png"
+            lower.contains("food network") -> "$rawLogoBase/food_network.png"
+            lower.contains("tlc") -> "$rawLogoBase/tlc.png"
+            lower.contains("code fashion") -> "$rawLogoBase/star_channel.png"
+            // Kids
+            lower.contains("disney") -> "$rawLogoBase/disney_channel.png"
+            lower.contains("cartoon") -> "$rawLogoBase/cartoon_network.png"
+            lower.contains("nick jr") -> "$rawLogoBase/nick_jr.png"
+            lower.contains("nicktoons") -> "$rawLogoBase/nicktoons.png"
+            lower.contains("nickelodeon") -> "$rawLogoBase/nickelodeon.png"
+            lower.contains("e kids") -> "$rawLogoBase/cartoon_network.png"
+            // News / Business
+            lower.contains("bloomberg") -> "$rawLogoBase/bloomberg.png"
+            lower.contains("euronews") -> "$rawLogoBase/euronews.png"
+            // Bulgarian national channels
             lower.contains("bulgaria on air") -> "$rawLogoBase/bulgaria_on_air.png"
             lower.contains("kanal 3") -> "$rawLogoBase/kanal3.png"
             lower.contains("78 tv") || lower.contains("7/8 tv") -> "$rawLogoBase/78tv.png"
             lower.contains("skat") -> "$rawLogoBase/skat.png"
             lower.contains("vtk") -> "$rawLogoBase/vtk.png"
             lower.contains("evrokom") -> "$rawLogoBase/evrokom.png"
+            // Music / Entertainment
+            lower.contains("city") -> "$rawLogoBase/star_channel.png"
+            lower.contains("the voice") -> "$rawLogoBase/star_channel.png"
+            lower.contains("planeta") -> "$rawLogoBase/diema.png"
+            lower.contains("folklor") -> "$rawLogoBase/diema.png"
+            lower.contains("tiankov") -> "$rawLogoBase/diema.png"
+            lower.contains("rodina") -> "$rawLogoBase/diema.png"
+            lower.contains("dstv") -> "$rawLogoBase/diema.png"
             else -> if (defaultImg.isNotEmpty()) fixUrl(defaultImg) else defaultPoster
         }
     }
