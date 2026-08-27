@@ -10,7 +10,7 @@ import org.jsoup.Jsoup
 
 class ExampleProvider : MainAPI() {
     override var mainUrl = "https://www.seirsanduk.online"
-    override var name = "SeirSanduk TV"
+    override var name = "Bushido TV"
     override val supportedTypes = setOf(TvType.Live)
     override var lang = "bg"
     override val hasMainPage = true
@@ -131,7 +131,7 @@ class ExampleProvider : MainAPI() {
         }
 
         return if (logoFile != null) {
-            "$rawLogoBase/$logoFile?v=13"
+            "$rawLogoBase/$logoFile?v=14"
         } else {
             if (defaultImg.isNotEmpty()) fixUrl(defaultImg) else defaultPoster
         }
@@ -221,7 +221,7 @@ class ExampleProvider : MainAPI() {
         }
         val poster = getHighResLogo(title, "")
         val description = document.select("#program .nav").text().trim().ifEmpty {
-            "SeirSanduk Canlı TV Akışı."
+            "Bushido TV Canlı Akışı."
         }
 
         return newLiveStreamLoadResponse(

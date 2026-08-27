@@ -4,11 +4,11 @@ dependencies {
 }
 
 // Sürüm numarasını tam sayı (Integer) olarak belirtiyoruz
-version = 13
+version = 14
 
 cloudstream {
     // Eklentimizin uygulamanın uzantılar sayfasında görünecek bilgileri
-    description = "SeirSanduk TV üzerindeki canlı TV, spor, film ve çocuk kanallarını kesintisiz izlemenizi sağlar."
+    description = "Bushido TV üzerindeki canlı TV, spor, film ve çocuk kanallarını kesintisiz izlemenizi sağlar."
     authors = listOf("bushidoxyz")
 
     /**

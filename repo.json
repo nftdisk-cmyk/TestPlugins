@@ -1,6 +1,6 @@
 {
-  "name": "İnat TV Repository",
-  "description": "İnat TV Canlı TV Cloudstream Eklentisi",
+  "name": "Bushido TV Repository",
+  "description": "Bushido TV Canlı TV Cloudstream Eklentisi",
   "manifestVersion": 1,
   "pluginLists": [
     "https://raw.githubusercontent.com/nftdisk-cmyk/TestPlugins/builds/plugins.json"
