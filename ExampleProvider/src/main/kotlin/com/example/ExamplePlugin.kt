@@ -12,8 +12,11 @@ class ExamplePlugin: Plugin() {
     override fun load(context: Context) {
         activity = context as? AppCompatActivity
 
-        // İnat TV canlı yayın sağlayıcımızı sisteme entegre ediyoruz
+        // Mevcut sağlayıcılar
         registerMainAPI(ExampleProvider())
+
+        // Yeni dinamik Inat TV sağlayıcısı
+        registerMainAPI(DynamicLiveProvider())
 
         // Şablonun beraberinde getirdiği BlankFragment ayarlar menüsünü koruyoruz
         openSettings = {
