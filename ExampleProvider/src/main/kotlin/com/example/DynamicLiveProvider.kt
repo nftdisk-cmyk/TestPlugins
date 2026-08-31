@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 
 class DynamicLiveProvider : MainAPI() {
     override var name = "Inat Live"
@@ -22,6 +23,13 @@ class DynamicLiveProvider : MainAPI() {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
         private var cachedDynamicUrl: String? = null
+
+        // Ad and promotional domain/keyword blocklist
+        private val AD_KEYWORDS = listOf(
+            "bet", "casino", "promo", "banner", "ad", "ads", "sponsor", "stream-ad",
+            "advert", "popunder", "click", "tracker", "affiliate", "bonus", "slot",
+            "kumar", "bahis", "reklam", "tanitim", "adserver", "doubleclick"
+        )
 
         /**
          * Dynamically resolves the base URL from Google Sheets (Row 2 / Cell A2).
@@ -42,6 +50,16 @@ class DynamicLiveProvider : MainAPI() {
                 FALLBACK_URL
             } catch (e: Exception) {
                 FALLBACK_URL
+            }
+        }
+
+        /**
+         * Checks if a URL or keyword matches known ad or promotional patterns.
+         */
+        fun isAdOrPromo(url: String): Boolean {
+            val lower = url.lowercase()
+            return AD_KEYWORDS.any { keyword ->
+                lower.contains("/") || lower.contains(".") || lower.contains("-") || lower.contains("_") || lower.contains("=")
             }
         }
     }
@@ -75,7 +93,7 @@ class DynamicLiveProvider : MainAPI() {
                 ?: return@mapNotNull null
 
             val href = element.attr("href").ifEmpty { element.selectFirst("a")?.attr("href") } ?: return@mapNotNull null
-            if (href == "#" || href.startsWith("javascript:")) return@mapNotNull null
+            if (href == "#" || href.startsWith("javascript:") || isAdOrPromo(href)) return@mapNotNull null
 
             val posterUrl = element.selectFirst("img")?.let {
                 it.attr("src").ifEmpty { it.attr("data-src") }
@@ -119,6 +137,8 @@ class DynamicLiveProvider : MainAPI() {
                 ?: return@mapNotNull null
 
             val href = element.attr("href").ifEmpty { element.selectFirst("a")?.attr("href") } ?: return@mapNotNull null
+            if (href == "#" || href.startsWith("javascript:") || isAdOrPromo(href)) return@mapNotNull null
+
             val posterUrl = element.selectFirst("img")?.let {
                 it.attr("src").ifEmpty { it.attr("data-src") }
             }
@@ -163,68 +183,139 @@ class DynamicLiveProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val baseUrl = syncMainUrl()
-        val streamHeaders = mapOf(
+        val parentHeaders = mapOf(
             "User-Agent" to USER_AGENT,
             "Referer" to "$baseUrl/",
             "Origin" to baseUrl.trimEnd('/'),
-            "Accept" to "*/*"
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         )
 
         val html = try {
-            app.get(data, headers = streamHeaders).text
+            app.get(data, headers = parentHeaders).text
         } catch (e: Exception) {
             return false
         }
 
-        val document = Jsoup.parse(html)
+        val parentDoc = Jsoup.parse(html)
+        var foundStream = false
 
-        // 1. Check for direct .m3u8 regex pattern
-        val m3u8Regex = Regex("""(?:"|')(https?://[^"']+\.m3u8[^"']*)(?:"|')""")
-        val m3u8Match = m3u8Regex.find(html)?.groupValues?.get(1)
-            ?: document.selectFirst("source[src*=.m3u8], video[src*=.m3u8]")?.attr("src")
+        // Regex patterns for extracting .m3u8 live playlists
+        val m3u8RegexList = listOf(
+            Regex("""(?:source|file|src|url)\s*:\s*['"](https?://[^'"]+\.m3u8[^'"]*)['"]""", RegexOption.IGNORE_CASE),
+            Regex("""['"](https?://[^'"]+\.m3u8[^'"]*)['"]""", RegexOption.IGNORE_CASE),
+            Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""", RegexOption.IGNORE_CASE)
+        )
 
-        if (!m3u8Match.isNullOrEmpty()) {
-            val resolvedStreamUrl = fixUrl(m3u8Match)
-            callback.invoke(
-                newExtractorLink(
-                    source = this.name,
-                    name = "$name - Canlı",
-                    url = resolvedStreamUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = "$baseUrl/"
-                    this.headers = streamHeaders
-                    this.quality = Qualities.P1080.value
-                }
-            )
-            return true
+        // 1. Target dedicated player containers and inner iframes systematically
+        val iframeCandidates = mutableListOf<String>()
+
+        // Priority iframe selectors (inside player containers)
+        val playerContainers = parentDoc.select("#player iframe, .player iframe, #stream iframe, .stream iframe, div[id*='player'] iframe, div[class*='player'] iframe")
+        playerContainers.forEach { iframe ->
+            val src = iframe.attr("src").ifEmpty { iframe.attr("data-src") }
+            if (src.isNotEmpty() && !isAdOrPromo(src)) {
+                iframeCandidates.add(fixUrl(src))
+            }
         }
 
-        // 2. Check for embedded iframe players
-        val iframeSrc = document.selectFirst("iframe[src]")?.attr("src")
-        if (!iframeSrc.isNullOrEmpty()) {
-            val fullIframeUrl = fixUrl(iframeSrc)
+        // Generic iframe selectors if no dedicated player iframe found
+        if (iframeCandidates.isEmpty()) {
+            parentDoc.select("iframe[src*='player'], iframe[src*='embed'], iframe[src*='stream'], iframe[src*='live'], iframe[src]").forEach { iframe ->
+                val src = iframe.attr("src").ifEmpty { iframe.attr("data-src") }
+                if (src.isNotEmpty() && !isAdOrPromo(src)) {
+                    iframeCandidates.add(fixUrl(src))
+                }
+            }
+        }
+
+        // 2. Fetch and inspect each candidate inner iframe with parent URL as Referer
+        for (iframeUrl in iframeCandidates.distinct()) {
             try {
-                val iframeHtml = app.get(fullIframeUrl, headers = streamHeaders).text
-                val iframeStream = m3u8Regex.find(iframeHtml)?.groupValues?.get(1)
-                if (!iframeStream.isNullOrEmpty()) {
+                val iframeHeaders = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to data,
+                    "Origin" to baseUrl.trimEnd('/'),
+                    "Accept" to "*/*"
+                )
+
+                val iframeHtml = app.get(iframeUrl, headers = iframeHeaders).text
+                if (iframeHtml.isEmpty()) continue
+
+                // Check for nested iframes within this iframe
+                val innerDoc = Jsoup.parse(iframeHtml)
+                val nestedIframe = innerDoc.selectFirst("iframe[src]")?.attr("src")
+                val finalIframeHtml = if (!nestedIframe.isNullOrEmpty() && !isAdOrPromo(nestedIframe)) {
+                    val nestedUrl = fixUrl(nestedIframe)
+                    try {
+                        app.get(nestedUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to iframeUrl)).text
+                    } catch (e: Exception) {
+                        iframeHtml
+                    }
+                } else {
+                    iframeHtml
+                }
+
+                // Search for valid non-ad .m3u8 stream links
+                for (regex in m3u8RegexList) {
+                    val matches = regex.findAll(finalIframeHtml)
+                    for (match in matches) {
+                        val streamUrl = match.groupValues.getOrNull(1) ?: match.value
+                        if (streamUrl.isNotEmpty() && !isAdOrPromo(streamUrl)) {
+                            val resolvedStreamUrl = fixUrl(streamUrl)
+                            val streamHeaders = mapOf(
+                                "User-Agent" to USER_AGENT,
+                                "Referer" to iframeUrl,
+                                "Origin" to baseUrl.trimEnd('/')
+                            )
+
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = this.name,
+                                    name = "$name - Canlı Yayın",
+                                    url = resolvedStreamUrl,
+                                    type = ExtractorLinkType.M3U8
+                                ) {
+                                    this.referer = iframeUrl
+                                    this.headers = streamHeaders
+                                    this.quality = Qualities.P1080.value
+                                }
+                            )
+                            foundStream = true
+                            break
+                        }
+                    }
+                    if (foundStream) break
+                }
+                if (foundStream) break
+            } catch (e: Exception) {
+                // Continue to next candidate iframe on error
+            }
+        }
+
+        // 3. Fallback: Parse top-level script only if iframes yielded no valid non-ad stream
+        if (!foundStream) {
+            for (regex in m3u8RegexList) {
+                val match = regex.find(html)?.groupValues?.getOrNull(1)
+                if (!match.isNullOrEmpty() && !isAdOrPromo(match)) {
+                    val resolvedStreamUrl = fixUrl(match)
                     callback.invoke(
                         newExtractorLink(
                             source = this.name,
-                            name = "$name - Web Player",
-                            url = fixUrl(iframeStream),
+                            name = "$name - Canlı (Doğrudan)",
+                            url = resolvedStreamUrl,
                             type = ExtractorLinkType.M3U8
                         ) {
                             this.referer = "$baseUrl/"
-                            this.headers = streamHeaders
+                            this.headers = parentHeaders
                             this.quality = Qualities.P1080.value
                         }
                     )
-                    return true
+                    foundStream = true
+                    break
                 }
-            } catch (e: Exception) { }
+            }
         }
 
-        return false
+        return foundStream
     }
 }
