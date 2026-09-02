@@ -1,13 +1,10 @@
-﻿package com.example
+package com.example
 
-import android.net.Uri
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.Jsoup
-import java.net.URI
 
 class DynamicLiveProvider : MainAPI() {
     override var name = "Inat Live"
@@ -54,18 +51,6 @@ class DynamicLiveProvider : MainAPI() {
                 FALLBACK_URL
             }
         }
-
-        fun getOrigin(url: String): String {
-            return try {
-                val uri = URI(url)
-                val portStr = if (uri.port != -1 && uri.port != 80 && uri.port != 443) ":" else ""
-                "://"
-            } catch (e: Exception) {
-                val prefix = if (url.contains("://")) url.substringBefore("://") + "://" else "https://"
-                val hostPart = url.substringAfter("://").substringBefore("/")
-                ""
-            }
-        }
     }
 
     private suspend fun syncMainUrl(): String {
@@ -76,12 +61,9 @@ class DynamicLiveProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val baseUrl = syncMainUrl()
-        val baseOrigin = getOrigin(baseUrl)
         val headers = mapOf(
             "User-Agent" to ANDROID_WEBVIEW_UA,
-            "Referer" to "/",
-            "Origin" to baseOrigin,
-            "X-Requested-With" to "com.inattv.app",
+            "Referer" to "$baseUrl/",
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         )
 
@@ -103,11 +85,11 @@ class DynamicLiveProvider : MainAPI() {
             val category = element.attr("data-category").trim().lowercase()
 
             if (rawName.isNotEmpty() && href.isNotEmpty() && href != "#" && !href.startsWith("javascript:")) {
-                val title = if (status.isNotEmpty() && status != "7/24") " ()" else rawName
+                val title = if (status.isNotEmpty() && status != "7/24") "$rawName ($status)" else rawName
                 val fullUrl = if (href.startsWith("http://") || href.startsWith("https://")) {
                     href
                 } else {
-                    "/"
+                    "${baseUrl.trimEnd('/')}/${href.trimStart('/')}"
                 }
 
                 val matchesCategory = when (request.data) {
@@ -136,7 +118,7 @@ class DynamicLiveProvider : MainAPI() {
         val baseUrl = syncMainUrl()
         val headers = mapOf(
             "User-Agent" to ANDROID_WEBVIEW_UA,
-            "Referer" to "/"
+            "Referer" to "$baseUrl/"
         )
 
         val html = try {
@@ -156,11 +138,11 @@ class DynamicLiveProvider : MainAPI() {
 
             if (rawName.isNotEmpty() && href.isNotEmpty() && href != "#") {
                 if (rawName.lowercase().contains(q)) {
-                    val title = if (status.isNotEmpty() && status != "7/24") " ()" else rawName
+                    val title = if (status.isNotEmpty() && status != "7/24") "$rawName ($status)" else rawName
                     val fullUrl = if (href.startsWith("http://") || href.startsWith("https://")) {
                         href
                     } else {
-                        "/"
+                        "${baseUrl.trimEnd('/')}/${href.trimStart('/')}"
                     }
 
                     searchList.add(
@@ -181,7 +163,7 @@ class DynamicLiveProvider : MainAPI() {
         val baseUrl = syncMainUrl()
         val headers = mapOf(
             "User-Agent" to ANDROID_WEBVIEW_UA,
-            "Referer" to "/"
+            "Referer" to "$baseUrl/"
         )
 
         val html = try {
@@ -210,96 +192,39 @@ class DynamicLiveProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val baseUrl = syncMainUrl()
-        val baseOrigin = getOrigin(baseUrl)
-        val parentHeaders = mapOf(
-            "User-Agent" to ANDROID_WEBVIEW_UA,
-            "Referer" to "/",
-            "Origin" to baseOrigin,
-            "X-Requested-With" to "com.inattv.app",
-            "Accept" to "*/*"
-        )
+        return try {
+            // Ağa düşen .m3u8 isteğini yakalamak için filtresi
+            val targetRegex = Regex(""".*\.m3u8.*""")
 
-        val html = try {
-            app.get(data, headers = parentHeaders).text
-        } catch (e: Exception) {
-            return false
-        }
-
-        val uri = Uri.parse(data)
-        val channelId = uri.getQueryParameter("id")
-        var foundStream = false
-
-        // 1. If channel id is a direct .m3u8 link (e.g. ?id=https://.../701.m3u8)
-        if (!channelId.isNullOrEmpty() && (channelId.startsWith("http://") || channelId.startsWith("https://"))) {
-            callback.invoke(
-                newExtractorLink(
-                    source = this.name,
-                    name = " - Canlı Yayın",
-                    url = channelId,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = "/"
-                    this.headers = mapOf(
-                        "User-Agent" to ANDROID_WEBVIEW_UA,
-                        "Referer" to "/",
-                        "Origin" to baseOrigin
-                    )
-                    this.quality = Qualities.P1080.value
-                }
+            // Arka planda görünmez WebView açıp ağ trafiğini dinler
+            val request = app.get(
+                data,
+                interceptor = WebViewResolver(targetRegex)
             )
-            foundStream = true
-        }
 
-        // 2. Extract CONFIG.baseUrl and construct dynamic mono.m3u8 link
-        val configBaseMatch = Regex("""baseUrl\s*:\s*['"](https?://[^'"]+)['"]""").find(html)
-        val configBaseUrl = configBaseMatch?.groupValues?.get(1)
+            val interceptedM3u8 = request.url
 
-        if (!configBaseUrl.isNullOrEmpty() && !channelId.isNullOrEmpty() && !channelId.startsWith("http")) {
-            val constructedStreamUrl = "//mono.m3u8"
-            val streamOrigin = getOrigin(constructedStreamUrl)
-
-            callback.invoke(
-                newExtractorLink(
-                    source = this.name,
-                    name = " - Ana Sunucu (HLS)",
-                    url = constructedStreamUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = data
-                    this.headers = mapOf(
-                        "User-Agent" to ANDROID_WEBVIEW_UA,
-                        "Referer" to data,
-                        "Origin" to baseOrigin,
-                        "X-Requested-With" to "com.inattv.app"
-                    )
-                    this.quality = Qualities.P1080.value
-                }
-            )
-            foundStream = true
-        }
-
-        // 3. Check for any direct m3u8 in page scripts or iframes
-        val m3u8Regex = Regex("""(?:"|')(https?://[^"'\s]+\.m3u8[^"'\s]*)(?:"|')""")
-        m3u8Regex.findAll(html).forEach { match ->
-            val streamUrl = match.groupValues[1]
-            if (!streamUrl.contains("video.bsky.app") && !streamUrl.contains("preroll") && !streamUrl.contains("ad")) {
+            if (interceptedM3u8.contains(".m3u8")) {
                 callback.invoke(
-                    newExtractorLink(
+                    ExtractorLink(
                         source = this.name,
-                        name = " - Canlı Akış",
-                        url = streamUrl,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = data
-                        this.headers = parentHeaders
-                        this.quality = Qualities.P1080.value
-                    }
+                        name = this.name,
+                        url = interceptedM3u8,
+                        referer = data,
+                        quality = Qualities.Unknown.value,
+                        isM3u8 = true,
+                        headers = mapOf(
+                            "User-Agent" to ANDROID_WEBVIEW_UA,
+                            "Referer" to data
+                        )
+                    )
                 )
-                foundStream = true
+                true
+            } else {
+                false
             }
+        } catch (e: Exception) {
+            false
         }
-
-        return foundStream
     }
 }
