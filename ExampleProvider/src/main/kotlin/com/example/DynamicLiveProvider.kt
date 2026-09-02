@@ -1,4 +1,4 @@
-package com.example
+﻿package com.example
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -6,7 +6,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
+import java.net.URI
 
 class DynamicLiveProvider : MainAPI() {
     override var name = "Inat Live"
@@ -19,8 +19,10 @@ class DynamicLiveProvider : MainAPI() {
         private const val CONFIG_CSV_URL =
             "https://docs.google.com/spreadsheets/d/1IHYlgjzhLCX3MKhewg7FGTf_oIkNlXzl2ogYXkSRjFM/export?format=csv"
         private const val FALLBACK_URL = "https://www.google.com"
-        private const val USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+        // Android WebView User-Agent for strict mobile webview validation
+        private const val ANDROID_WEBVIEW_UA =
+            "Mozilla/5.0 (Linux; Android 13; Pixel 7 Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.6099.210 Mobile Safari/537.36"
 
         private var cachedDynamicUrl: String? = null
 
@@ -28,7 +30,7 @@ class DynamicLiveProvider : MainAPI() {
         private val AD_KEYWORDS = listOf(
             "bet", "casino", "promo", "banner", "ad", "ads", "sponsor", "stream-ad",
             "advert", "popunder", "click", "tracker", "affiliate", "bonus", "slot",
-            "kumar", "bahis", "reklam", "tanitim", "adserver", "doubleclick"
+            "kumar", "bahis", "reklam", "tanitim", "adserver", "doubleclick", "googleads"
         )
 
         /**
@@ -58,8 +60,37 @@ class DynamicLiveProvider : MainAPI() {
          */
         fun isAdOrPromo(url: String): Boolean {
             val lower = url.lowercase()
-            return AD_KEYWORDS.any { keyword ->
-                lower.contains("/") || lower.contains(".") || lower.contains("-") || lower.contains("_") || lower.contains("=")
+            return AD_KEYWORDS.any { kw ->
+                lower.contains("/") || lower.contains(".") || lower.contains("-") ||
+                lower.contains("_") || lower.contains("=") || lower.contains("//") ||
+                lower.contains("googleads") || lower.contains("doubleclick")
+            }
+        }
+
+        /**
+         * Checks if the HTML response is a Cloudflare anti-bot challenge page.
+         */
+        fun isCloudflareChallenge(html: String): Boolean {
+            return html.contains("cf-browser-verification", ignoreCase = true) ||
+                   html.contains("Just a moment...", ignoreCase = true) ||
+                   html.contains("challenge-platform", ignoreCase = true) ||
+                   html.contains("turnstile", ignoreCase = true) ||
+                   html.contains("Attention Required! | Cloudflare", ignoreCase = true) ||
+                   html.contains("cf-challenge-running", ignoreCase = true)
+        }
+
+        /**
+         * Extracts the origin (protocol + host + port) from a URL.
+         */
+        fun getOrigin(url: String): String {
+            return try {
+                val uri = URI(url)
+                val portStr = if (uri.port != -1 && uri.port != 80 && uri.port != 443) ":" else ""
+                "://"
+            } catch (e: Exception) {
+                val prefix = if (url.contains("://")) url.substringBefore("://") + "://" else "https://"
+                val hostPart = url.substringAfter("://").substringBefore("/")
+                ""
             }
         }
     }
@@ -72,14 +103,22 @@ class DynamicLiveProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val baseUrl = syncMainUrl()
+        val baseOrigin = getOrigin(baseUrl)
         val headers = mapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to "$baseUrl/",
-            "Origin" to baseUrl.trimEnd('/')
+            "User-Agent" to ANDROID_WEBVIEW_UA,
+            "Referer" to "/",
+            "Origin" to baseOrigin,
+            "X-Requested-With" to "com.inattv.app",
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
         )
 
         val html = try {
-            app.get(baseUrl, headers = headers).text
+            val response = app.get(baseUrl, headers = headers)
+            if (isCloudflareChallenge(response.text)) {
+                app.get(baseUrl, headers = headers, timeout = 15L).text
+            } else {
+                response.text
+            }
         } catch (e: Exception) {
             return newHomePageResponse(emptyList<HomePageList>())
         }
@@ -118,11 +157,12 @@ class DynamicLiveProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val baseUrl = syncMainUrl()
         val headers = mapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to "$baseUrl/"
+            "User-Agent" to ANDROID_WEBVIEW_UA,
+            "Referer" to "/",
+            "X-Requested-With" to "com.inattv.app"
         )
 
-        val searchUrl = "$baseUrl/?s=$query"
+        val searchUrl = "/?s="
         val html = try {
             app.get(searchUrl, headers = headers).text
         } catch (e: Exception) {
@@ -156,8 +196,9 @@ class DynamicLiveProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val baseUrl = syncMainUrl()
         val headers = mapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to "$baseUrl/"
+            "User-Agent" to ANDROID_WEBVIEW_UA,
+            "Referer" to "/",
+            "X-Requested-With" to "com.inattv.app"
         )
 
         val html = app.get(url, headers = headers).text
@@ -183,15 +224,22 @@ class DynamicLiveProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val baseUrl = syncMainUrl()
+        val baseOrigin = getOrigin(baseUrl)
         val parentHeaders = mapOf(
-            "User-Agent" to USER_AGENT,
-            "Referer" to "$baseUrl/",
-            "Origin" to baseUrl.trimEnd('/'),
+            "User-Agent" to ANDROID_WEBVIEW_UA,
+            "Referer" to "/",
+            "Origin" to baseOrigin,
+            "X-Requested-With" to "com.inattv.app",
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         )
 
         val html = try {
-            app.get(data, headers = parentHeaders).text
+            val response = app.get(data, headers = parentHeaders)
+            if (isCloudflareChallenge(response.text)) {
+                app.get(data, headers = parentHeaders, timeout = 15L).text
+            } else {
+                response.text
+            }
         } catch (e: Exception) {
             return false
         }
@@ -218,7 +266,7 @@ class DynamicLiveProvider : MainAPI() {
             }
         }
 
-        // Generic iframe selectors if no dedicated player iframe found
+        // Generic iframe selectors if no dedicated player container iframe found
         if (iframeCandidates.isEmpty()) {
             parentDoc.select("iframe[src*='player'], iframe[src*='embed'], iframe[src*='stream'], iframe[src*='live'], iframe[src]").forEach { iframe ->
                 val src = iframe.attr("src").ifEmpty { iframe.attr("data-src") }
@@ -228,55 +276,80 @@ class DynamicLiveProvider : MainAPI() {
             }
         }
 
-        // 2. Fetch and inspect each candidate inner iframe with parent URL as Referer
+        // 2. Fetch and inspect each candidate inner iframe using the exact parent URL as Referer
         for (iframeUrl in iframeCandidates.distinct()) {
             try {
+                val iframeOrigin = getOrigin(iframeUrl)
                 val iframeHeaders = mapOf(
-                    "User-Agent" to USER_AGENT,
+                    "User-Agent" to ANDROID_WEBVIEW_UA,
                     "Referer" to data,
-                    "Origin" to baseUrl.trimEnd('/'),
+                    "Origin" to iframeOrigin,
+                    "X-Requested-With" to "com.inattv.app",
                     "Accept" to "*/*"
                 )
 
-                val iframeHtml = app.get(iframeUrl, headers = iframeHeaders).text
-                if (iframeHtml.isEmpty()) continue
-
-                // Check for nested iframes within this iframe
-                val innerDoc = Jsoup.parse(iframeHtml)
-                val nestedIframe = innerDoc.selectFirst("iframe[src]")?.attr("src")
-                val finalIframeHtml = if (!nestedIframe.isNullOrEmpty() && !isAdOrPromo(nestedIframe)) {
-                    val nestedUrl = fixUrl(nestedIframe)
-                    try {
-                        app.get(nestedUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to iframeUrl)).text
-                    } catch (e: Exception) {
-                        iframeHtml
-                    }
+                val iframeResponse = app.get(iframeUrl, headers = iframeHeaders)
+                val iframeHtml = if (isCloudflareChallenge(iframeResponse.text)) {
+                    app.get(iframeUrl, headers = iframeHeaders, timeout = 15L).text
                 } else {
-                    iframeHtml
+                    iframeResponse.text
                 }
 
-                // Search for valid non-ad .m3u8 stream links
+                if (iframeHtml.isEmpty()) continue
+
+                // Check for nested player iframes within this iframe
+                val innerDoc = Jsoup.parse(iframeHtml)
+                val nestedIframe = innerDoc.selectFirst("iframe[src]")?.attr("src")
+                val (finalIframeHtml, exactStreamReferer) = if (!nestedIframe.isNullOrEmpty() && !isAdOrPromo(nestedIframe)) {
+                    val nestedUrl = fixUrl(nestedIframe)
+                    val nestedOrigin = getOrigin(nestedUrl)
+                    try {
+                        val nestedHeaders = mapOf(
+                            "User-Agent" to ANDROID_WEBVIEW_UA,
+                            "Referer" to iframeUrl,
+                            "Origin" to nestedOrigin,
+                            "X-Requested-With" to "com.inattv.app"
+                        )
+                        val res = app.get(nestedUrl, headers = nestedHeaders).text
+                        Pair(res, nestedUrl)
+                    } catch (e: Exception) {
+                        Pair(iframeHtml, iframeUrl)
+                    }
+                } else {
+                    Pair(iframeHtml, iframeUrl)
+                }
+
+                val finalOrigin = getOrigin(exactStreamReferer)
+
+                // Search for valid non-ad .m3u8 stream links inside the iframe content
                 for (regex in m3u8RegexList) {
                     val matches = regex.findAll(finalIframeHtml)
                     for (match in matches) {
                         val streamUrl = match.groupValues.getOrNull(1) ?: match.value
                         if (streamUrl.isNotEmpty() && !isAdOrPromo(streamUrl)) {
                             val resolvedStreamUrl = fixUrl(streamUrl)
-                            val streamHeaders = mapOf(
-                                "User-Agent" to USER_AGENT,
-                                "Referer" to iframeUrl,
-                                "Origin" to baseUrl.trimEnd('/')
+
+                            // Persistent ExoPlayer headers: EXACT iframe Referer and Origin attached
+                            val persistentStreamHeaders = mapOf(
+                                "User-Agent" to ANDROID_WEBVIEW_UA,
+                                "Referer" to exactStreamReferer,
+                                "Origin" to finalOrigin,
+                                "X-Requested-With" to "com.inattv.app",
+                                "Accept" to "*/*",
+                                "Sec-Fetch-Dest" to "empty",
+                                "Sec-Fetch-Mode" to "cors",
+                                "Sec-Fetch-Site" to "cross-site"
                             )
 
                             callback.invoke(
                                 newExtractorLink(
                                     source = this.name,
-                                    name = "$name - Canlı Yayın",
+                                    name = " - Canlı Yayın",
                                     url = resolvedStreamUrl,
                                     type = ExtractorLinkType.M3U8
                                 ) {
-                                    this.referer = iframeUrl
-                                    this.headers = streamHeaders
+                                    this.referer = exactStreamReferer
+                                    this.headers = persistentStreamHeaders
                                     this.quality = Qualities.P1080.value
                                 }
                             )
@@ -288,25 +361,33 @@ class DynamicLiveProvider : MainAPI() {
                 }
                 if (foundStream) break
             } catch (e: Exception) {
-                // Continue to next candidate iframe on error
+                // Continue checking next candidate iframe on error
             }
         }
 
-        // 3. Fallback: Parse top-level script only if iframes yielded no valid non-ad stream
+        // 3. Fallback: Parse top-level script only if inner iframes yielded no valid non-ad stream
         if (!foundStream) {
             for (regex in m3u8RegexList) {
                 val match = regex.find(html)?.groupValues?.getOrNull(1)
                 if (!match.isNullOrEmpty() && !isAdOrPromo(match)) {
                     val resolvedStreamUrl = fixUrl(match)
+                    val fallbackHeaders = mapOf(
+                        "User-Agent" to ANDROID_WEBVIEW_UA,
+                        "Referer" to data,
+                        "Origin" to baseOrigin,
+                        "X-Requested-With" to "com.inattv.app",
+                        "Accept" to "*/*"
+                    )
+
                     callback.invoke(
                         newExtractorLink(
                             source = this.name,
-                            name = "$name - Canlı (Doğrudan)",
+                            name = " - Canlı (Doğrudan)",
                             url = resolvedStreamUrl,
                             type = ExtractorLinkType.M3U8
                         ) {
-                            this.referer = "$baseUrl/"
-                            this.headers = parentHeaders
+                            this.referer = data
+                            this.headers = fallbackHeaders
                             this.quality = Qualities.P1080.value
                         }
                     )
