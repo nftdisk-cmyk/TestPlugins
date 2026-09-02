@@ -4,30 +4,26 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import kotlinx.serialization.Serializable
 
-@Serializable
 data class PatronChannel(
-    val Mac: String,
-    val Logo: String,
-    val URL: String
+    val Mac: String = "",
+    val Logo: String = "",
+    val URL: String = ""
 )
 
-@Serializable
 data class PatronMatch(
-    val HomeTeam: String,
-    val AwayTeam: String,
-    val HomeLogo: String,
-    val AwayLogo: String,
-    val Time: String,
-    val URL: String,
-    val type: String,
-    val league: String
+    val HomeTeam: String = "",
+    val AwayTeam: String = "",
+    val HomeLogo: String = "",
+    val AwayLogo: String = "",
+    val Time: String = "",
+    val URL: String = "",
+    val type: String = "",
+    val league: String = ""
 )
 
-@Serializable
 data class PatronDomain(
-    val baseurl: String
+    val baseurl: String = ""
 )
 
 class DynamicLiveProvider : MainAPI() {
@@ -38,10 +34,10 @@ class DynamicLiveProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Live)
 
     override val mainPage = mainPageOf(
-        "channels"   to "Canli TV Kanallari",
-        "football"   to "Futbol Maclari",
-        "basketball" to "Basketbol Maclari",
-        "other"      to "Diger Maclar"
+        Pair("channels",   "Canli TV Kanallari"),
+        Pair("football",   "Futbol Maclari"),
+        Pair("basketball", "Basketbol Maclari"),
+        Pair("other",      "Diger Maclar")
     )
 
     companion object {
@@ -49,7 +45,6 @@ class DynamicLiveProvider : MainAPI() {
         private const val MATCHES_API  = "https://patronsports2.cfd/matches.php"
         private const val DOMAIN_API   = "https://patronsports2.cfd/domain.php"
         private const val SITE_BASE    = "https://patronvip32.cfd"
-
         private const val UA =
             "Mozilla/5.0 (Linux; Android 13; Pixel 7 Build/TQ3A.230901.001; wv) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 " +
@@ -60,9 +55,8 @@ class DynamicLiveProvider : MainAPI() {
         suspend fun getStreamBaseUrl(): String {
             cachedBaseUrl?.let { return it }
             return try {
-                val json = app.get(DOMAIN_API).text
-                val obj = parseJson<PatronDomain>(json)
-                obj.baseurl.also { cachedBaseUrl = it }
+                val domain = parseJson<PatronDomain>(app.get(DOMAIN_API).text)
+                domain.baseurl.also { cachedBaseUrl = it }
             } catch (e: Exception) {
                 "https://2i4.d72577a9dd0ec71.cfd/"
             }
@@ -77,13 +71,13 @@ class DynamicLiveProvider : MainAPI() {
             }
         }
 
-        fun logoUrl(path: String): String {
+        fun resolveLogoUrl(path: String): String {
             if (path.startsWith("http")) return path
             return "$SITE_BASE/${path.trimStart('/')}"
         }
     }
 
-    private fun commonHeaders() = mapOf(
+    private fun headers() = mapOf(
         "User-Agent" to UA,
         "Referer"    to "$SITE_BASE/",
         "Origin"     to SITE_BASE
@@ -91,39 +85,30 @@ class DynamicLiveProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val baseUrl = getStreamBaseUrl()
-        val headers = commonHeaders()
         val list = mutableListOf<SearchResponse>()
 
         if (request.data == "channels") {
-            val channels = parseJson<List<PatronChannel>>(
-                app.get(CHANNELS_API, headers = headers).text
-            )
+            val channels = parseJson<List<PatronChannel>>(app.get(CHANNELS_API, headers = headers()).text)
             channels.forEach { ch ->
-                list.add(
-                    newLiveSearchResponse(
-                        name = ch.Mac,
-                        url  = buildStreamUrl(baseUrl, ch.URL),
-                        type = TvType.Live
-                    ) { this.posterUrl = logoUrl(ch.Logo) }
-                )
+                list.add(newLiveSearchResponse(
+                    name = ch.Mac,
+                    url  = buildStreamUrl(baseUrl, ch.URL),
+                    type = TvType.Live
+                ) { this.posterUrl = resolveLogoUrl(ch.Logo) })
             }
         } else {
-            val matches = parseJson<List<PatronMatch>>(
-                app.get(MATCHES_API, headers = headers).text
-            )
+            val matches = parseJson<List<PatronMatch>>(app.get(MATCHES_API, headers = headers()).text)
             val filtered = when (request.data) {
                 "football"   -> matches.filter { it.type == "football" }
                 "basketball" -> matches.filter { it.type == "basketball" }
                 else         -> matches.filter { it.type !in listOf("football", "basketball") }
             }
             filtered.forEach { m ->
-                list.add(
-                    newLiveSearchResponse(
-                        name = "${m.HomeTeam} - ${m.AwayTeam} (${m.Time})",
-                        url  = buildStreamUrl(baseUrl, m.URL),
-                        type = TvType.Live
-                    ) { this.posterUrl = m.HomeLogo }
-                )
+                list.add(newLiveSearchResponse(
+                    name = "${m.HomeTeam} - ${m.AwayTeam}  [${m.Time}]",
+                    url  = buildStreamUrl(baseUrl, m.URL),
+                    type = TvType.Live
+                ) { this.posterUrl = m.HomeLogo })
             }
         }
 
@@ -132,36 +117,31 @@ class DynamicLiveProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val baseUrl = getStreamBaseUrl()
-        val headers = commonHeaders()
-        val results = mutableListOf<SearchResponse>()
         val q = query.lowercase().trim()
+        val results = mutableListOf<SearchResponse>()
 
-        parseJson<List<PatronChannel>>(app.get(CHANNELS_API, headers = headers).text)
+        parseJson<List<PatronChannel>>(app.get(CHANNELS_API, headers = headers()).text)
             .filter { it.Mac.lowercase().contains(q) }
             .forEach { ch ->
-                results.add(
-                    newLiveSearchResponse(
-                        name = ch.Mac,
-                        url  = buildStreamUrl(baseUrl, ch.URL),
-                        type = TvType.Live
-                    ) { this.posterUrl = logoUrl(ch.Logo) }
-                )
+                results.add(newLiveSearchResponse(
+                    name = ch.Mac,
+                    url  = buildStreamUrl(baseUrl, ch.URL),
+                    type = TvType.Live
+                ) { this.posterUrl = resolveLogoUrl(ch.Logo) })
             }
 
-        parseJson<List<PatronMatch>>(app.get(MATCHES_API, headers = headers).text)
+        parseJson<List<PatronMatch>>(app.get(MATCHES_API, headers = headers()).text)
             .filter {
                 it.HomeTeam.lowercase().contains(q) ||
                 it.AwayTeam.lowercase().contains(q) ||
                 it.league.lowercase().contains(q)
             }
             .forEach { m ->
-                results.add(
-                    newLiveSearchResponse(
-                        name = "${m.HomeTeam} - ${m.AwayTeam} (${m.Time})",
-                        url  = buildStreamUrl(baseUrl, m.URL),
-                        type = TvType.Live
-                    ) { this.posterUrl = m.HomeLogo }
-                )
+                results.add(newLiveSearchResponse(
+                    name = "${m.HomeTeam} - ${m.AwayTeam}  [${m.Time}]",
+                    url  = buildStreamUrl(baseUrl, m.URL),
+                    type = TvType.Live
+                ) { this.posterUrl = m.HomeLogo })
             }
 
         return results
@@ -186,13 +166,13 @@ class DynamicLiveProvider : MainAPI() {
         if (!data.contains(".m3u8")) return false
         callback.invoke(
             ExtractorLink(
-                source   = this.name,
-                name     = this.name,
-                url      = data,
-                referer  = "$SITE_BASE/",
-                quality  = Qualities.Unknown.value,
-                isM3u8   = true,
-                headers  = mapOf(
+                source  = this.name,
+                name    = this.name,
+                url     = data,
+                referer = "$SITE_BASE/",
+                quality = Qualities.Unknown.value,
+                isM3u8  = true,
+                headers = mapOf(
                     "User-Agent" to UA,
                     "Referer"    to "$SITE_BASE/",
                     "Origin"     to SITE_BASE
