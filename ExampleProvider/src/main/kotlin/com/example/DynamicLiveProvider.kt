@@ -1,5 +1,6 @@
 ﻿package com.example
 
+import android.net.Uri
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -13,25 +14,24 @@ class DynamicLiveProvider : MainAPI() {
     override var mainUrl = FALLBACK_URL
     override var lang = "tr"
     override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.Live, TvType.Movie, TvType.TvSeries)
+    override val supportedTypes = setOf(TvType.Live)
+
+    override val mainPage = mainPageOf(
+        Pair("all", "Tüm Kanallar & Maçlar"),
+        Pair("24-7", "7/24 Canlı TV Kanalları"),
+        Pair("football", "Futbol Maçları"),
+        Pair("basketball", "Basketbol Maçları")
+    )
 
     companion object {
         private const val CONFIG_CSV_URL =
             "https://docs.google.com/spreadsheets/d/1IHYlgjzhLCX3MKhewg7FGTf_oIkNlXzl2ogYXkSRjFM/export?format=csv"
         private const val FALLBACK_URL = "https://www.google.com"
 
-        // Android WebView User-Agent for strict mobile webview validation
         private const val ANDROID_WEBVIEW_UA =
             "Mozilla/5.0 (Linux; Android 13; Pixel 7 Build/TQ3A.230901.001; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.6099.210 Mobile Safari/537.36"
 
         private var cachedDynamicUrl: String? = null
-
-        // Ad and promotional domain/keyword blocklist
-        private val AD_KEYWORDS = listOf(
-            "bet", "casino", "promo", "banner", "ad", "ads", "sponsor", "stream-ad",
-            "advert", "popunder", "click", "tracker", "affiliate", "bonus", "slot",
-            "kumar", "bahis", "reklam", "tanitim", "adserver", "doubleclick", "googleads"
-        )
 
         /**
          * Dynamically resolves the base URL from Google Sheets (Row 2 / Cell A2).
@@ -55,33 +55,6 @@ class DynamicLiveProvider : MainAPI() {
             }
         }
 
-        /**
-         * Checks if a URL or keyword matches known ad or promotional patterns.
-         */
-        fun isAdOrPromo(url: String): Boolean {
-            val lower = url.lowercase()
-            return AD_KEYWORDS.any { kw ->
-                lower.contains("/") || lower.contains(".") || lower.contains("-") ||
-                lower.contains("_") || lower.contains("=") || lower.contains("//") ||
-                lower.contains("googleads") || lower.contains("doubleclick")
-            }
-        }
-
-        /**
-         * Checks if the HTML response is a Cloudflare anti-bot challenge page.
-         */
-        fun isCloudflareChallenge(html: String): Boolean {
-            return html.contains("cf-browser-verification", ignoreCase = true) ||
-                   html.contains("Just a moment...", ignoreCase = true) ||
-                   html.contains("challenge-platform", ignoreCase = true) ||
-                   html.contains("turnstile", ignoreCase = true) ||
-                   html.contains("Attention Required! | Cloudflare", ignoreCase = true) ||
-                   html.contains("cf-challenge-running", ignoreCase = true)
-        }
-
-        /**
-         * Extracts the origin (protocol + host + port) from a URL.
-         */
         fun getOrigin(url: String): String {
             return try {
                 val uri = URI(url)
@@ -109,111 +82,125 @@ class DynamicLiveProvider : MainAPI() {
             "Referer" to "/",
             "Origin" to baseOrigin,
             "X-Requested-With" to "com.inattv.app",
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         )
 
         val html = try {
-            val response = app.get(baseUrl, headers = headers)
-            if (isCloudflareChallenge(response.text)) {
-                app.get(baseUrl, headers = headers, timeout = 15L).text
-            } else {
-                response.text
-            }
+            app.get(baseUrl, headers = headers).text
         } catch (e: Exception) {
-            return newHomePageResponse(emptyList<HomePageList>())
+            return newHomePageResponse(request, emptyList())
         }
 
         val document = Jsoup.parse(html)
-        val homePageList = mutableListOf<HomePageList>()
+        val channelList = mutableListOf<SearchResponse>()
+        val channelElements = document.select("a.channel-item")
 
-        val channels = document.select("div.channel, a.channel-link, div.card, div.item, li.channel-item, a[href*=/]").mapNotNull { element ->
-            val title = element.selectFirst(".title, h2, h3, h4, span, p")?.text()?.trim()
-                ?: element.text().trim().takeIf { it.isNotEmpty() }
-                ?: return@mapNotNull null
+        channelElements.forEach { element ->
+            val nameEl = element.selectFirst(".channel-name")
+            val rawName = nameEl?.text()?.trim() ?: element.text().trim()
+            val status = element.selectFirst(".channel-status")?.text()?.trim().orEmpty()
+            val href = element.attr("href").trim()
+            val category = element.attr("data-category").trim().lowercase()
 
-            val href = element.attr("href").ifEmpty { element.selectFirst("a")?.attr("href") } ?: return@mapNotNull null
-            if (href == "#" || href.startsWith("javascript:") || isAdOrPromo(href)) return@mapNotNull null
+            if (rawName.isNotEmpty() && href.isNotEmpty() && href != "#" && !href.startsWith("javascript:")) {
+                val title = if (status.isNotEmpty() && status != "7/24") " ()" else rawName
+                val fullUrl = if (href.startsWith("http://") || href.startsWith("https://")) {
+                    href
+                } else {
+                    "/"
+                }
 
-            val posterUrl = element.selectFirst("img")?.let {
-                it.attr("src").ifEmpty { it.attr("data-src") }
-            }
+                val matchesCategory = when (request.data) {
+                    "football"   -> category == "football"
+                    "basketball" -> category == "basketball"
+                    "24-7"       -> status == "7/24" || category.isEmpty()
+                    else         -> true
+                }
 
-            newLiveSearchResponse(
-                name = title,
-                url = fixUrl(href),
-                type = TvType.Live
-            ) {
-                this.posterUrl = posterUrl?.let { fixUrl(it) }
+                if (matchesCategory) {
+                    channelList.add(
+                        newLiveSearchResponse(
+                            name = title,
+                            url = fullUrl,
+                            type = TvType.Live
+                        )
+                    )
+                }
             }
         }
 
-        if (channels.isNotEmpty()) {
-            homePageList.add(HomePageList("Canlı Yayınlar", channels))
-        }
-
-        return newHomePageResponse(homePageList)
+        return newHomePageResponse(request, channelList)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val baseUrl = syncMainUrl()
         val headers = mapOf(
             "User-Agent" to ANDROID_WEBVIEW_UA,
-            "Referer" to "/",
-            "X-Requested-With" to "com.inattv.app"
+            "Referer" to "/"
         )
 
-        val searchUrl = "/?s="
         val html = try {
-            app.get(searchUrl, headers = headers).text
+            app.get(baseUrl, headers = headers).text
         } catch (e: Exception) {
             return emptyList()
         }
 
         val document = Jsoup.parse(html)
+        val searchList = mutableListOf<SearchResponse>()
+        val q = query.lowercase().trim()
 
-        return document.select("div.search-item, div.card, a.item, div.channel").mapNotNull { element ->
-            val title = element.selectFirst(".title, h2, h3, span")?.text()?.trim()
-                ?: element.text().trim().takeIf { it.isNotEmpty() }
-                ?: return@mapNotNull null
+        document.select("a.channel-item").forEach { element ->
+            val rawName = element.selectFirst(".channel-name")?.text()?.trim() ?: element.text().trim()
+            val status = element.selectFirst(".channel-status")?.text()?.trim().orEmpty()
+            val href = element.attr("href").trim()
 
-            val href = element.attr("href").ifEmpty { element.selectFirst("a")?.attr("href") } ?: return@mapNotNull null
-            if (href == "#" || href.startsWith("javascript:") || isAdOrPromo(href)) return@mapNotNull null
+            if (rawName.isNotEmpty() && href.isNotEmpty() && href != "#") {
+                if (rawName.lowercase().contains(q)) {
+                    val title = if (status.isNotEmpty() && status != "7/24") " ()" else rawName
+                    val fullUrl = if (href.startsWith("http://") || href.startsWith("https://")) {
+                        href
+                    } else {
+                        "/"
+                    }
 
-            val posterUrl = element.selectFirst("img")?.let {
-                it.attr("src").ifEmpty { it.attr("data-src") }
-            }
-
-            newLiveSearchResponse(
-                name = title,
-                url = fixUrl(href),
-                type = TvType.Live
-            ) {
-                this.posterUrl = posterUrl?.let { fixUrl(it) }
+                    searchList.add(
+                        newLiveSearchResponse(
+                            name = title,
+                            url = fullUrl,
+                            type = TvType.Live
+                        )
+                    )
+                }
             }
         }
+
+        return searchList
     }
 
     override suspend fun load(url: String): LoadResponse {
         val baseUrl = syncMainUrl()
         val headers = mapOf(
             "User-Agent" to ANDROID_WEBVIEW_UA,
-            "Referer" to "/",
-            "X-Requested-With" to "com.inattv.app"
+            "Referer" to "/"
         )
 
-        val html = app.get(url, headers = headers).text
-        val document = Jsoup.parse(html)
+        val html = try {
+            app.get(url, headers = headers).text
+        } catch (e: Exception) {
+            ""
+        }
 
-        val title = document.selectFirst("h1, .channel-title, .title")?.text()?.trim() ?: "Canlı Yayın"
-        val posterUrl = document.selectFirst(".poster img, .channel-logo img, img")?.attr("src")
+        val document = Jsoup.parse(html)
+        val title = document.selectFirst(".channel-title, h1, title")?.text()?.trim()
+            ?.replace("Video Player", "")?.trim()?.ifEmpty { "Canlı Yayın" }
+            ?: "Canlı Yayın"
 
         return newLiveStreamLoadResponse(
             name = title,
             url = url,
             dataUrl = url
         ) {
-            this.posterUrl = posterUrl?.let { fixUrl(it) }
-            this.plot = document.selectFirst(".description, p.desc")?.text()?.trim()
+            this.plot = "İnat TV Canlı Yayın Akışı"
         }
     }
 
@@ -230,170 +217,86 @@ class DynamicLiveProvider : MainAPI() {
             "Referer" to "/",
             "Origin" to baseOrigin,
             "X-Requested-With" to "com.inattv.app",
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            "Accept" to "*/*"
         )
 
         val html = try {
-            val response = app.get(data, headers = parentHeaders)
-            if (isCloudflareChallenge(response.text)) {
-                app.get(data, headers = parentHeaders, timeout = 15L).text
-            } else {
-                response.text
-            }
+            app.get(data, headers = parentHeaders).text
         } catch (e: Exception) {
             return false
         }
 
-        val parentDoc = Jsoup.parse(html)
+        val uri = Uri.parse(data)
+        val channelId = uri.getQueryParameter("id")
         var foundStream = false
 
-        // Regex patterns for extracting .m3u8 live playlists
-        val m3u8RegexList = listOf(
-            Regex("""(?:source|file|src|url)\s*:\s*['"](https?://[^'"]+\.m3u8[^'"]*)['"]""", RegexOption.IGNORE_CASE),
-            Regex("""['"](https?://[^'"]+\.m3u8[^'"]*)['"]""", RegexOption.IGNORE_CASE),
-            Regex("""(https?://[^\s"'<>]+\.m3u8[^\s"'<>]*)""", RegexOption.IGNORE_CASE)
-        )
-
-        // 1. Target dedicated player containers and inner iframes systematically
-        val iframeCandidates = mutableListOf<String>()
-
-        // Priority iframe selectors (inside player containers)
-        val playerContainers = parentDoc.select("#player iframe, .player iframe, #stream iframe, .stream iframe, div[id*='player'] iframe, div[class*='player'] iframe")
-        playerContainers.forEach { iframe ->
-            val src = iframe.attr("src").ifEmpty { iframe.attr("data-src") }
-            if (src.isNotEmpty() && !isAdOrPromo(src)) {
-                iframeCandidates.add(fixUrl(src))
-            }
+        // 1. If channel id is a direct .m3u8 link (e.g. ?id=https://.../701.m3u8)
+        if (!channelId.isNullOrEmpty() && (channelId.startsWith("http://") || channelId.startsWith("https://"))) {
+            callback.invoke(
+                newExtractorLink(
+                    source = this.name,
+                    name = " - Canlı Yayın",
+                    url = channelId,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = "/"
+                    this.headers = mapOf(
+                        "User-Agent" to ANDROID_WEBVIEW_UA,
+                        "Referer" to "/",
+                        "Origin" to baseOrigin
+                    )
+                    this.quality = Qualities.P1080.value
+                }
+            )
+            foundStream = true
         }
 
-        // Generic iframe selectors if no dedicated player container iframe found
-        if (iframeCandidates.isEmpty()) {
-            parentDoc.select("iframe[src*='player'], iframe[src*='embed'], iframe[src*='stream'], iframe[src*='live'], iframe[src]").forEach { iframe ->
-                val src = iframe.attr("src").ifEmpty { iframe.attr("data-src") }
-                if (src.isNotEmpty() && !isAdOrPromo(src)) {
-                    iframeCandidates.add(fixUrl(src))
-                }
-            }
-        }
+        // 2. Extract CONFIG.baseUrl and construct dynamic mono.m3u8 link
+        val configBaseMatch = Regex("""baseUrl\s*:\s*['"](https?://[^'"]+)['"]""").find(html)
+        val configBaseUrl = configBaseMatch?.groupValues?.get(1)
 
-        // 2. Fetch and inspect each candidate inner iframe using the exact parent URL as Referer
-        for (iframeUrl in iframeCandidates.distinct()) {
-            try {
-                val iframeOrigin = getOrigin(iframeUrl)
-                val iframeHeaders = mapOf(
-                    "User-Agent" to ANDROID_WEBVIEW_UA,
-                    "Referer" to data,
-                    "Origin" to iframeOrigin,
-                    "X-Requested-With" to "com.inattv.app",
-                    "Accept" to "*/*"
-                )
+        if (!configBaseUrl.isNullOrEmpty() && !channelId.isNullOrEmpty() && !channelId.startsWith("http")) {
+            val constructedStreamUrl = "//mono.m3u8"
+            val streamOrigin = getOrigin(constructedStreamUrl)
 
-                val iframeResponse = app.get(iframeUrl, headers = iframeHeaders)
-                val iframeHtml = if (isCloudflareChallenge(iframeResponse.text)) {
-                    app.get(iframeUrl, headers = iframeHeaders, timeout = 15L).text
-                } else {
-                    iframeResponse.text
-                }
-
-                if (iframeHtml.isEmpty()) continue
-
-                // Check for nested player iframes within this iframe
-                val innerDoc = Jsoup.parse(iframeHtml)
-                val nestedIframe = innerDoc.selectFirst("iframe[src]")?.attr("src")
-                val (finalIframeHtml, exactStreamReferer) = if (!nestedIframe.isNullOrEmpty() && !isAdOrPromo(nestedIframe)) {
-                    val nestedUrl = fixUrl(nestedIframe)
-                    val nestedOrigin = getOrigin(nestedUrl)
-                    try {
-                        val nestedHeaders = mapOf(
-                            "User-Agent" to ANDROID_WEBVIEW_UA,
-                            "Referer" to iframeUrl,
-                            "Origin" to nestedOrigin,
-                            "X-Requested-With" to "com.inattv.app"
-                        )
-                        val res = app.get(nestedUrl, headers = nestedHeaders).text
-                        Pair(res, nestedUrl)
-                    } catch (e: Exception) {
-                        Pair(iframeHtml, iframeUrl)
-                    }
-                } else {
-                    Pair(iframeHtml, iframeUrl)
-                }
-
-                val finalOrigin = getOrigin(exactStreamReferer)
-
-                // Search for valid non-ad .m3u8 stream links inside the iframe content
-                for (regex in m3u8RegexList) {
-                    val matches = regex.findAll(finalIframeHtml)
-                    for (match in matches) {
-                        val streamUrl = match.groupValues.getOrNull(1) ?: match.value
-                        if (streamUrl.isNotEmpty() && !isAdOrPromo(streamUrl)) {
-                            val resolvedStreamUrl = fixUrl(streamUrl)
-
-                            // Persistent ExoPlayer headers: EXACT iframe Referer and Origin attached
-                            val persistentStreamHeaders = mapOf(
-                                "User-Agent" to ANDROID_WEBVIEW_UA,
-                                "Referer" to exactStreamReferer,
-                                "Origin" to finalOrigin,
-                                "X-Requested-With" to "com.inattv.app",
-                                "Accept" to "*/*",
-                                "Sec-Fetch-Dest" to "empty",
-                                "Sec-Fetch-Mode" to "cors",
-                                "Sec-Fetch-Site" to "cross-site"
-                            )
-
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = this.name,
-                                    name = " - Canlı Yayın",
-                                    url = resolvedStreamUrl,
-                                    type = ExtractorLinkType.M3U8
-                                ) {
-                                    this.referer = exactStreamReferer
-                                    this.headers = persistentStreamHeaders
-                                    this.quality = Qualities.P1080.value
-                                }
-                            )
-                            foundStream = true
-                            break
-                        }
-                    }
-                    if (foundStream) break
-                }
-                if (foundStream) break
-            } catch (e: Exception) {
-                // Continue checking next candidate iframe on error
-            }
-        }
-
-        // 3. Fallback: Parse top-level script only if inner iframes yielded no valid non-ad stream
-        if (!foundStream) {
-            for (regex in m3u8RegexList) {
-                val match = regex.find(html)?.groupValues?.getOrNull(1)
-                if (!match.isNullOrEmpty() && !isAdOrPromo(match)) {
-                    val resolvedStreamUrl = fixUrl(match)
-                    val fallbackHeaders = mapOf(
+            callback.invoke(
+                newExtractorLink(
+                    source = this.name,
+                    name = " - Ana Sunucu (HLS)",
+                    url = constructedStreamUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = data
+                    this.headers = mapOf(
                         "User-Agent" to ANDROID_WEBVIEW_UA,
                         "Referer" to data,
                         "Origin" to baseOrigin,
-                        "X-Requested-With" to "com.inattv.app",
-                        "Accept" to "*/*"
+                        "X-Requested-With" to "com.inattv.app"
                     )
-
-                    callback.invoke(
-                        newExtractorLink(
-                            source = this.name,
-                            name = " - Canlı (Doğrudan)",
-                            url = resolvedStreamUrl,
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            this.referer = data
-                            this.headers = fallbackHeaders
-                            this.quality = Qualities.P1080.value
-                        }
-                    )
-                    foundStream = true
-                    break
+                    this.quality = Qualities.P1080.value
                 }
+            )
+            foundStream = true
+        }
+
+        // 3. Check for any direct m3u8 in page scripts or iframes
+        val m3u8Regex = Regex("""(?:"|')(https?://[^"'\s]+\.m3u8[^"'\s]*)(?:"|')""")
+        m3u8Regex.findAll(html).forEach { match ->
+            val streamUrl = match.groupValues[1]
+            if (!streamUrl.contains("video.bsky.app") && !streamUrl.contains("preroll") && !streamUrl.contains("ad")) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = this.name,
+                        name = " - Canlı Akış",
+                        url = streamUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = data
+                        this.headers = parentHeaders
+                        this.quality = Qualities.P1080.value
+                    }
+                )
+                foundStream = true
             }
         }
 
