@@ -3,7 +3,9 @@
 import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.Jsoup
 
 class DynamicLiveProvider : MainAPI() {
@@ -225,13 +227,12 @@ class DynamicLiveProvider : MainAPI() {
             return false
         }
 
-        val watchPathMatch = Regex("""<iframe[^>]+src=["'](/(?:channel/watch/|loadstream)[^"'\\s>]+)""").find(mainHtml)
-            ?: Regex("""<iframe[^>]+id=["']playerFrame["'][^>]+src=["']([^"'\\s>]+)""").find(mainHtml)
-
-        val rawWatchPath = watchPathMatch?.groupValues?.get(1) ?: return false
+        val doc1 = Jsoup.parse(mainHtml)
+        val iframe1 = doc1.selectFirst("#playerFrame, iframe[src*=channel/watch], iframe[src*=loadstream]")
+        val rawWatchPath = iframe1?.attr("src")?.trim() ?: return false
         val watchUrl = if (rawWatchPath.startsWith("http")) rawWatchPath else "${mainUrl.trimEnd('/')}/${rawWatchPath.trimStart('/')}"
 
-        // 2. Fetch watch page (if not directly loadstream)
+        // 2. Fetch watch page
         val loadUrl = if (watchUrl.contains("loadstream")) {
             watchUrl
         } else {
@@ -241,11 +242,9 @@ class DynamicLiveProvider : MainAPI() {
             } catch (e: Exception) {
                 return false
             }
-
-            val loadPathMatch = Regex("""<iframe[^>]+src=["'](/loadstream[^"'\\s>]+)""").find(watchHtml)
-                ?: Regex("""<iframe[^>]+src=["']([^"'\\s>]*loadstream[^"'\\s>]*)""").find(watchHtml)
-
-            val rawLoadPath = loadPathMatch?.groupValues?.get(1) ?: return false
+            val doc2 = Jsoup.parse(watchHtml)
+            val iframe2 = doc2.selectFirst("iframe[src*=loadstream]")
+            val rawLoadPath = iframe2?.attr("src")?.trim() ?: return false
             if (rawLoadPath.startsWith("http")) rawLoadPath else "${mainUrl.trimEnd('/')}/${rawLoadPath.trimStart('/')}"
         }
 
@@ -257,28 +256,27 @@ class DynamicLiveProvider : MainAPI() {
             return false
         }
 
-        // 4. Extract real m3u8
+        // 4. Extract m3u8
         var m3u8Url: String? = null
-
-        // Direct check
         val directMatch = Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""").find(loadHtml)
-        if (directMatch != null && !directMatch.value.contains("bsky.app") && !directMatch.value.contains("preroll")) {
+        if (directMatch != null) {
             m3u8Url = directMatch.value
-        }
-
-        // Base64 check ('...|atob')
-        if (m3u8Url == null) {
-            val b64Match = Regex("""['"]([A-Za-z0-9+/=]{30,})\|atob""").find(loadHtml)
-            if (b64Match != null) {
-                val decoded = decodeBase64(b64Match.groupValues[1])
-                val decodedM3u8 = Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""").find(decoded)
-                if (decodedM3u8 != null) {
-                    m3u8Url = decodedM3u8.value
+        } else {
+            val atobIndex = loadHtml.indexOf("|atob")
+            if (atobIndex != -1) {
+                val beforeAtob = loadHtml.substring(0, atobIndex)
+                val lastQuote = maxOf(beforeAtob.lastIndexOf('\''), beforeAtob.lastIndexOf('"'))
+                if (lastQuote != -1) {
+                    val b64Str = beforeAtob.substring(lastQuote + 1)
+                    val decoded = decodeBase64(b64Str)
+                    val m = Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""").find(decoded)
+                    if (m != null) {
+                        m3u8Url = m.value
+                    }
                 }
             }
         }
 
-        // Search any base64 chunks
         if (m3u8Url == null) {
             Regex("""[A-Za-z0-9+/=]{40,}""").findAll(loadHtml).forEach { match ->
                 if (m3u8Url == null) {
@@ -294,19 +292,20 @@ class DynamicLiveProvider : MainAPI() {
         if (m3u8Url.isNullOrEmpty()) return false
 
         callback.invoke(
-            ExtractorLink(
+            newExtractorLink(
                 source = this.name,
-                name = this.name,
+                name = "${this.name} - HD",
                 url = m3u8Url,
-                referer = "$mainUrl/",
-                quality = Qualities.P1080.value,
-                isM3u8 = true,
-                headers = mapOf(
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = "$mainUrl/"
+                this.headers = mapOf(
                     "User-Agent" to USER_AGENT,
                     "Referer" to "$mainUrl/",
                     "Origin" to mainUrl
                 )
-            )
+                this.quality = Qualities.P1080.value
+            }
         )
         return true
     }
